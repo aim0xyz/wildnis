@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WILDNIS — Low-Poly Survival</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="crosshair">+</div>
+    <div id="targetName"></div>
+    <div id="prompt" class="hidden"></div>
+    <div id="toasts"></div>
+
+    <div id="statsPanel">
+      <div class="bar hp"><span class="bicon">❤️</span><div class="track"><div class="fill" id="hpFill"></div></div></div>
+      <div class="bar hunger"><span class="bicon">🍖</span><div class="track"><div class="fill" id="hungerFill"></div></div></div>
+    </div>
+
+    <div id="clockPanel">
+      <span id="timeIcon">☀️</span>
+      <span id="dayLabel">Tag 1</span>
+    </div>
+
+    <div id="matPanel"></div>
+
+    <div id="selName"></div>
+    <div id="hotbar"></div>
+  </div>
+
+  <!-- Crafting -->
+  <div id="craft" class="hidden">
+    <div class="craftBox">
+      <h2>🛠️ Crafting</h2>
+      <div id="recipeList"></div>
+      <h2>🎒 Inventar</h2>
+      <div id="invGrid"></div>
+      <button id="craftClose" class="bigBtn">Zurück ins Spiel (Tab)</button>
+    </div>
+  </div>
+
+  <!-- Overlay: Menü / Pause / Tod -->
+  <div id="overlay">
+    <div class="panel">
+      <h1 id="ovTitle">🏕️ WILDNIS</h1>
+      <p id="ovSub" class="sub">Low-Poly Survival</p>
+      <div class="btnrow">
+        <button id="btnPlay" class="bigBtn primary">▶️ Spiel starten</button>
+        <button id="btnNew" class="bigBtn hidden">🌱 Neues Spiel</button>
+      </div>
+      <table id="ovControls" class="controls">
+        <tr><td>W A S D</td><td>Laufen</td></tr>
+        <tr><td>Shift</td><td>Sprinten</td></tr>
+        <tr><td>Leertaste</td><td>Springen</td></tr>
+        <tr><td>Maus</td><td>Umsehen</td></tr>
+        <tr><td>Linksklick</td><td>Sammeln · Kämpfen · Essen · Bauen</td></tr>
+        <tr><td>E</td><td>Interagieren (Braten / Schlafen)</td></tr>
+        <tr><td>Tab / C</td><td>Crafting &amp; Inventar</td></tr>
+        <tr><td>1–9 / Mausrad</td><td>Hotbar</td></tr>
+        <tr><td>R</td><td>Bauteil drehen</td></tr>
+        <tr><td>M</td><td>Ton an / aus</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div id="vignette"></div>
+
+  <div id="touchUI" class="hidden" aria-label="Touch-Steuerung">
+    <button id="btnPauseM" class="touchTop" aria-label="Pause">Ⅱ</button>
+    <button id="btnCraftM" class="touchTop" aria-label="Crafting öffnen">🛠️</button>
+    <div id="joystick"><div id="joyKnob"></div></div>
+    <button id="btnRotate" class="touchBtn hidden" aria-label="Bauteil drehen">↻</button>
+    <button id="btnInteract" class="touchBtn hidden" aria-label="Interagieren">E</button>
+    <button id="btnJump" class="touchBtn" aria-label="Springen">↑</button>
+    <button id="btnAction" class="touchBtn action" aria-label="Aktion">👊</button>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
