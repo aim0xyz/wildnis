@@ -2,6 +2,7 @@
 // Action-/Sprung-/Interaktions-Buttons. Nutzt Pointer-Events (Multi-Touch via pointerId).
 
 const JOY_R = 52; // Joystick-Radius in px
+const JOY_DEADZONE = 0.12;
 
 export class TouchControls {
   constructor(canvas, player, actions) {
@@ -16,6 +17,8 @@ export class TouchControls {
     this.moveCenter = { x: 0, y: 0 };
     this.lookLast = { x: 0, y: 0 };
     this.repeatTimer = null;
+    this.actionPid = null;
+    this.actionLast = { x: 0, y: 0 };
     if (!this.enabled) return;
 
     document.body.classList.add('touch');
@@ -38,8 +41,8 @@ export class TouchControls {
       canvas.setPointerCapture(e.pointerId);
       if (this.movePid === null && e.clientX < innerWidth * 0.45) {
         this.movePid = e.pointerId;
-        this.moveCenter.x = Math.max(75, e.clientX);
-        this.moveCenter.y = Math.min(innerHeight - 80, Math.max(90, e.clientY));
+        this.moveCenter.x = Math.min(innerWidth * 0.38, Math.max(68, e.clientX));
+        this.moveCenter.y = Math.min(innerHeight - 68, Math.max(100, e.clientY));
         this.joy.style.left = this.moveCenter.x + 'px';
         this.joy.style.top = this.moveCenter.y + 'px';
         this.joy.classList.add('active');
@@ -59,17 +62,18 @@ export class TouchControls {
         const cl = Math.min(len, JOY_R);
         if (len > 0) { dx = (dx / len) * cl; dy = (dy / len) * cl; }
         this.setKnob(dx, dy);
-        this.vec.x = dx / JOY_R;
-        this.vec.y = -dy / JOY_R;
-        this.sprint = cl / JOY_R > 0.92;
+        const raw = cl / JOY_R;
+        const strength = raw <= JOY_DEADZONE ? 0 : (raw - JOY_DEADZONE) / (1 - JOY_DEADZONE);
+        this.vec.x = len ? (dx / cl) * strength : 0;
+        this.vec.y = len ? (-dy / cl) * strength : 0;
+        this.sprint = raw > 0.88;
       } else if (e.pointerId === this.lookPid) {
         if (this.player.canLook && !this.player.canLook()) return;
         const dx = e.clientX - this.lookLast.x;
         const dy = e.clientY - this.lookLast.y;
         this.lookLast.x = e.clientX;
         this.lookLast.y = e.clientY;
-        this.player.yaw -= dx * 0.0045;
-        this.player.pitch = Math.max(-1.5, Math.min(1.5, this.player.pitch - dy * 0.0045));
+        this.look(this.clampDelta(dx), this.clampDelta(dy));
       }
     });
 
@@ -88,7 +92,7 @@ export class TouchControls {
         e.stopPropagation();
         el.setPointerCapture(e.pointerId);
         el.classList.add('pressed');
-        onDown();
+        onDown(e);
       });
       const up = () => {
         el.classList.remove('pressed');
@@ -98,11 +102,26 @@ export class TouchControls {
       el.addEventListener('pointercancel', up);
     };
 
-    bind(this.btnAction, () => {
+    bind(this.btnAction, (e) => {
+      this.actionPid = e.pointerId;
+      this.actionLast.x = e.clientX;
+      this.actionLast.y = e.clientY;
       this.actions.primary();
       clearInterval(this.repeatTimer);
       this.repeatTimer = setInterval(() => this.actions.primary(), 480);
-    }, () => clearInterval(this.repeatTimer));
+    }, () => {
+      this.actionPid = null;
+      clearInterval(this.repeatTimer);
+    });
+
+    this.btnAction.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== this.actionPid) return;
+      const dx = this.clampDelta(e.clientX - this.actionLast.x);
+      const dy = this.clampDelta(e.clientY - this.actionLast.y);
+      this.actionLast.x = e.clientX;
+      this.actionLast.y = e.clientY;
+      this.look(dx, dy);
+    });
 
     bind(this.btnJump,
       () => { this.player.keys.Space = true; },
@@ -116,6 +135,16 @@ export class TouchControls {
 
   setKnob(dx, dy) {
     this.knob.style.transform = `translate(${dx}px, ${dy}px)`;
+  }
+
+  clampDelta(v) {
+    return Math.max(-32, Math.min(32, v));
+  }
+
+  look(dx, dy) {
+    if (this.player.canLook && !this.player.canLook()) return;
+    this.player.yaw -= dx * 0.0037;
+    this.player.pitch = Math.max(-1.45, Math.min(1.45, this.player.pitch - dy * 0.0037));
   }
 
   resetMove() {
@@ -133,6 +162,7 @@ export class TouchControls {
       this.resetMove();
       this.lookPid = null;
       clearInterval(this.repeatTimer);
+      this.actionPid = null;
       this.player.keys.Space = false;
     }
   }

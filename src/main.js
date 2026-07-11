@@ -11,6 +11,7 @@ import { sfx } from './sfx.js';
 import { TouchControls } from './touch.js';
 
 const SAVE_KEY = 'wildnis_save_v1';
+const RESPAWN_WAIT = 5 * 60 * 1000;
 
 // ---------- Setup ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -44,6 +45,7 @@ const game = {
   spawn: { x: 0, z: 6 },
   firstNightHintShown: false,
   deathCause: '',
+  respawnAt: 0,
 };
 
 buildings.onTentPlaced = (x, z) => {
@@ -278,16 +280,16 @@ document.addEventListener('pointerlockchange', () => {
 player.canLook = () => game.state === 'playing';
 
 function die(cause) {
+  if (game.state === 'dead') return;
   game.state = 'dead';
   game.deathCause = cause;
+  game.respawnAt = Date.now() + RESPAWN_WAIT;
   sfx.die();
   document.exitPointerLock();
   touch?.show(false);
-  // pointerlockchange feuert danach — Zustand hier erneut setzen
-  setTimeout(() => {
-    game.state = 'dead';
-    ui.showOverlay('dead', { days: world.day, cause });
-  }, 50);
+  ui.showHud(false);
+  ui.showOverlay('dead', { days: world.day, cause });
+  ui.setRespawnCountdown(RESPAWN_WAIT);
 }
 
 function respawn() {
@@ -397,6 +399,7 @@ function startGame() {
   if (game.state === 'menu') {
     if (!loadGame()) newGame();
   } else if (game.state === 'dead') {
+    if (Date.now() < game.respawnAt) return;
     respawn();
   }
   resumePlaying();
@@ -491,6 +494,7 @@ function tick(dt) {
     // Pause/Craft/Tod: Welt einfrieren, aber weiter rendern
     buildings.update(dt);
     effects.update(dt);
+    if (game.state === 'dead') ui.setRespawnCountdown(game.respawnAt - Date.now());
   }
 
   renderer.render(scene, camera);

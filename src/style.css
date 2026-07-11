@@ -237,6 +237,7 @@ html, body {
 .bigBtn:hover { transform: translateY(-1px); background: rgba(255,255,255,.2); }
 .bigBtn.primary { background: #ffd166; color: #2b2b1a; border-color: transparent; }
 .bigBtn.primary:hover { filter: brightness(1.08); }
+.bigBtn:disabled { opacity: .55; cursor: default; transform: none; filter: grayscale(.35); }
 
 .controls {
   margin: 0 auto; border-collapse: collapse;

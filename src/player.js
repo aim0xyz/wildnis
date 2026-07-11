@@ -189,8 +189,8 @@ export class Player {
 
     // Kamera + Head-Bob
     const moveAmt = Math.hypot(this.vel.x, this.vel.z);
-    this.bobT += moveAmt * dt * 1.6;
-    const bob = this.grounded ? Math.sin(this.bobT * 5) * 0.045 * Math.min(moveAmt / 4, 1) : 0;
+    this.bobT += moveAmt * dt * 0.75;
+    const bob = this.grounded ? Math.sin(this.bobT * 4) * 0.022 * Math.min(moveAmt / 4, 1) : 0;
     this.cam.position.set(this.pos.x, this.pos.y + 1.65 + bob, this.pos.z);
     this.cam.rotation.set(this.pitch, this.yaw, 0);
 
@@ -202,7 +202,7 @@ export class Player {
     } else {
       this.held.rotation.x = 0;
       // Idle-Bob des Werkzeugs
-      this.held.position.y = -0.38 + Math.sin(this.bobT * 5) * 0.012;
+      this.held.position.y = -0.38 + Math.sin(this.bobT * 4) * 0.007;
     }
 
     return { wading, moving: moveAmt > 0.3 };

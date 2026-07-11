@@ -64,7 +64,8 @@ export class UI {
       })
       .join('');
     for (const el of this.hotbarEl.querySelectorAll('.slot')) {
-      el.addEventListener('mousedown', (e) => {
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
         e.stopPropagation();
         if (this.onSelectSlot) this.onSelectSlot(+el.dataset.i);
       });
@@ -167,9 +168,20 @@ export class UI {
     } else if (kind === 'dead') {
       this.ovTitle.textContent = '💀 Du bist gestorben';
       this.ovSub.textContent = `${opts.days} Tag${opts.days === 1 ? '' : 'e'} überlebt. ${opts.cause || ''}`;
-      this.btnPlay.textContent = '🔄 Wiederbeleben';
+      this.btnPlay.textContent = '⏳ Wiederbeleben in 5:00';
+      this.btnPlay.disabled = true;
       this.btnNew.classList.remove('hidden');
       this.btnNew.textContent = '🌱 Neues Spiel';
     }
+    if (kind !== 'dead') this.btnPlay.disabled = false;
+  }
+
+  setRespawnCountdown(ms) {
+    const ready = ms <= 0;
+    const seconds = Math.max(0, Math.ceil(ms / 1000));
+    const min = Math.floor(seconds / 60);
+    const sec = String(seconds % 60).padStart(2, '0');
+    this.btnPlay.disabled = !ready;
+    this.btnPlay.textContent = ready ? '🔄 Jetzt wiederbeleben' : `⏳ Wiederbeleben in ${min}:${sec}`;
   }
 }
