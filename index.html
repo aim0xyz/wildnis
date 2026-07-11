@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>WILDNIS — Low-Poly Survival</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
@@ -17,12 +17,12 @@
     <div id="toasts"></div>
 
     <div id="statsPanel">
-      <div class="bar hp"><span class="bicon">❤️</span><div class="track"><div class="fill" id="hpFill"></div></div></div>
-      <div class="bar hunger"><span class="bicon">🍖</span><div class="track"><div class="fill" id="hungerFill"></div></div></div>
+      <div class="bar hp"><span class="bicon" data-icon="heart"></span><div class="track"><div class="fill" id="hpFill"></div></div></div>
+      <div class="bar hunger"><span class="bicon" data-icon="food"></span><div class="track"><div class="fill" id="hungerFill"></div></div></div>
     </div>
 
     <div id="clockPanel">
-      <span id="timeIcon">☀️</span>
+      <span id="timeIcon" data-icon="sun"></span>
       <span id="dayLabel">Tag 1</span>
     </div>
 
@@ -35,9 +35,9 @@
   <!-- Crafting -->
   <div id="craft" class="hidden">
     <div class="craftBox">
-      <h2>🛠️ Crafting</h2>
+      <h2><span data-icon="craft"></span> Crafting</h2>
       <div id="recipeList"></div>
-      <h2>🎒 Inventar</h2>
+      <h2><span data-icon="backpack"></span> Inventar</h2>
       <div id="invGrid"></div>
       <button id="craftClose" class="bigBtn">Zurück ins Spiel (Tab)</button>
     </div>
@@ -46,11 +46,11 @@
   <!-- Overlay: Menü / Pause / Tod -->
   <div id="overlay">
     <div class="panel">
-      <h1 id="ovTitle">🏕️ WILDNIS</h1>
+      <h1 id="ovTitle"><span data-icon="tent"></span> WILDNIS</h1>
       <p id="ovSub" class="sub">Low-Poly Survival</p>
       <div class="btnrow">
-        <button id="btnPlay" class="bigBtn primary">▶️ Spiel starten</button>
-        <button id="btnNew" class="bigBtn hidden">🌱 Neues Spiel</button>
+        <button id="btnPlay" class="bigBtn primary"><span data-icon="play"></span> Spiel starten</button>
+        <button id="btnNew" class="bigBtn hidden"><span data-icon="sprout"></span> Neues Spiel</button>
       </div>
       <table id="ovControls" class="controls">
         <tr><td>W A S D</td><td>Laufen</td></tr>
@@ -70,13 +70,13 @@
   <div id="vignette"></div>
 
   <div id="touchUI" class="hidden" aria-label="Touch-Steuerung">
-    <button id="btnPauseM" class="touchTop" aria-label="Pause">Ⅱ</button>
-    <button id="btnCraftM" class="touchTop" aria-label="Crafting öffnen">🛠️</button>
+    <button id="btnPauseM" class="touchTop" aria-label="Pause" data-icon="pause"></button>
+    <button id="btnCraftM" class="touchTop" aria-label="Crafting öffnen" data-icon="craft"></button>
     <div id="joystick"><div id="joyKnob"></div></div>
-    <button id="btnRotate" class="touchBtn hidden" aria-label="Bauteil drehen">↻</button>
+    <button id="btnRotate" class="touchBtn hidden" aria-label="Bauteil drehen" data-icon="rotate"></button>
     <button id="btnInteract" class="touchBtn hidden" aria-label="Interagieren">E</button>
-    <button id="btnJump" class="touchBtn" aria-label="Springen">↑</button>
-    <button id="btnAction" class="touchBtn action" aria-label="Aktion">👊</button>
+    <button id="btnJump" class="touchBtn" aria-label="Springen" data-icon="jump"></button>
+    <button id="btnAction" class="touchBtn action" aria-label="Aktion" data-icon="fist"></button>
   </div>
 
   <script type="module" src="/src/main.js"></script>

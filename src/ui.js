@@ -1,9 +1,11 @@
 import { ITEMS, RECIPES } from './items.js';
+import { icon, hydrateIcons } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 
 export class UI {
   constructor() {
+    hydrateIcons();
     this.hud = $('hud');
     this.hpFill = $('hpFill');
     this.hungerFill = $('hungerFill');
@@ -42,13 +44,13 @@ export class UI {
 
   setClock(day, elevation) {
     this.dayLabel.textContent = `Tag ${day}`;
-    this.timeIcon.textContent = elevation > 0.15 ? '☀️' : elevation > -0.02 ? '🌅' : '🌙';
+    this.timeIcon.innerHTML = icon(elevation > 0.15 ? 'sun' : elevation > -0.02 ? 'sunset' : 'moon');
   }
 
   setMaterials(inv) {
     const mats = ['holz', 'stein', 'fell'];
     this.matPanel.innerHTML = mats
-      .map((id) => `<div class="mat"><span>${ITEMS[id].icon}</span><b>${inv[id] || 0}</b></div>`)
+      .map((id) => `<div class="mat"><span>${icon(ITEMS[id].icon)}</span><b>${inv[id] || 0}</b></div>`)
       .join('');
   }
 
@@ -59,7 +61,7 @@ export class UI {
         const count = def.type === 'material' || def.type === 'food' || def.type === 'placeable'
           ? `<span class="count">${inv[id] || 0}</span>` : '';
         return `<div class="slot ${i === idx ? 'sel' : ''}" data-i="${i}" title="${def.name}">
-          <span class="key">${i + 1}</span><span class="icon">${def.icon}</span>${count}
+          <span class="key">${i + 1}</span><span class="itemIcon">${icon(def.icon)}</span>${count}
         </div>`;
       })
       .join('');
@@ -120,11 +122,11 @@ export class UI {
         .map(([id, n]) => {
           const have = inv[id] || 0;
           if (have < n) can = false;
-          return `<span class="chip ${have < n ? 'miss' : ''}">${ITEMS[id].icon}${n}</span>`;
+          return `<span class="chip ${have < n ? 'miss' : ''}">${icon(ITEMS[id].icon)}${n}</span>`;
         })
         .join('');
       return `<div class="recipe ${can ? '' : 'off'}">
-        <span class="ric">${def.icon}</span>
+        <span class="ric">${icon(def.icon)}</span>
         <div class="rmid">
           <b>${def.name}</b>
           <span class="rdesc">${r.desc}</span>
@@ -142,7 +144,7 @@ export class UI {
 
     const entries = Object.entries(inv).filter(([, n]) => n > 0);
     this.invGrid.innerHTML = entries.length
-      ? entries.map(([id, n]) => `<div class="invItem" title="${ITEMS[id].name}"><span>${ITEMS[id].icon}</span><b>${n}</b></div>`).join('')
+      ? entries.map(([id, n]) => `<div class="invItem" title="${ITEMS[id].name}"><span>${icon(ITEMS[id].icon)}</span><b>${n}</b></div>`).join('')
       : '<span class="empty">Noch nichts gesammelt…</span>';
   }
 
@@ -156,22 +158,22 @@ export class UI {
     this.ovControls.classList.toggle('hidden', kind === 'dead');
     this.btnNew.classList.toggle('hidden', kind === 'pause');
     if (kind === 'menu') {
-      this.ovTitle.textContent = '🏕️ WILDNIS';
+      this.ovTitle.innerHTML = `${icon('tent')} WILDNIS`;
       this.ovSub.textContent = 'Low-Poly Survival — Sammle, baue, überlebe die Nacht.';
-      this.btnPlay.textContent = opts.hasSave ? '▶️ Weiterspielen' : '▶️ Spiel starten';
+      this.btnPlay.innerHTML = `${icon('play')} ${opts.hasSave ? 'Weiterspielen' : 'Spiel starten'}`;
       this.btnNew.classList.toggle('hidden', !opts.hasSave);
-      this.btnNew.textContent = '🌱 Neues Spiel';
+      this.btnNew.innerHTML = `${icon('sprout')} Neues Spiel`;
     } else if (kind === 'pause') {
-      this.ovTitle.textContent = '⏸️ Pause';
+      this.ovTitle.innerHTML = `${icon('pause')} Pause`;
       this.ovSub.textContent = 'Klicke auf Weiter, um zurückzukehren.';
-      this.btnPlay.textContent = '▶️ Weiter';
+      this.btnPlay.innerHTML = `${icon('play')} Weiter`;
     } else if (kind === 'dead') {
-      this.ovTitle.textContent = '💀 Du bist gestorben';
+      this.ovTitle.innerHTML = `${icon('skull')} Du bist gestorben`;
       this.ovSub.textContent = `${opts.days} Tag${opts.days === 1 ? '' : 'e'} überlebt. ${opts.cause || ''}`;
-      this.btnPlay.textContent = '⏳ Wiederbeleben in 5:00';
+      this.btnPlay.innerHTML = `${icon('clock')} Wiederbeleben in 5:00`;
       this.btnPlay.disabled = true;
       this.btnNew.classList.remove('hidden');
-      this.btnNew.textContent = '🌱 Neues Spiel';
+      this.btnNew.innerHTML = `${icon('sprout')} Neues Spiel`;
     }
     if (kind !== 'dead') this.btnPlay.disabled = false;
   }
@@ -182,6 +184,6 @@ export class UI {
     const min = Math.floor(seconds / 60);
     const sec = String(seconds % 60).padStart(2, '0');
     this.btnPlay.disabled = !ready;
-    this.btnPlay.textContent = ready ? '🔄 Jetzt wiederbeleben' : `⏳ Wiederbeleben in ${min}:${sec}`;
+    this.btnPlay.innerHTML = ready ? `${icon('rotate')} Jetzt wiederbeleben` : `${icon('clock')} Wiederbeleben in ${min}:${sec}`;
   }
 }

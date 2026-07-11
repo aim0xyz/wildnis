@@ -50,20 +50,20 @@ const game = {
 
 buildings.onTentPlaced = (x, z) => {
   game.spawn = { x, z: z + 2.2 };
-  ui.toast('⛺ Spawnpunkt gesetzt!');
+  ui.toast('Spawnpunkt gesetzt!');
 };
 
 player.onDamage = (n) => {
   ui.damageFlash();
   sfx.hurt();
-  if (player.hp <= 0 && game.state === 'playing') die('Ein Wolf hat dich erwischt. 🐺');
+  if (player.hp <= 0 && game.state === 'playing') die('Ein Wolf hat dich erwischt.');
 };
 
 // ---------- Inventar ----------
 function addItem(id, n = 1, silent = false) {
   game.inv[id] = (game.inv[id] || 0) + n;
   if (!silent) {
-    ui.toast(`+${n} ${ITEMS[id].icon} ${ITEMS[id].name}`);
+    ui.toast(`+${n} ${ITEMS[id].name}`);
     sfx.pickup();
   }
   refreshInv();
@@ -95,7 +95,7 @@ function syncSelection() {
   const def = ITEMS[id];
   buildings.setGhostType(def.type === 'placeable' ? def.build : null);
   if (touch) {
-    touch.setActionIcon(def.type === 'food' ? '🍽️' : def.type === 'placeable' ? '🔨' : '👊');
+    touch.setActionIcon(def.type === 'food' ? 'food' : def.type === 'placeable' ? 'craft' : 'fist');
     touch.setRotateVisible(def.type === 'placeable');
   }
 }
@@ -143,9 +143,9 @@ function eatItem(id) {
   if (def.hp > 0) player.hp = Math.min(100, player.hp + def.hp);
   if (def.hp < 0) {
     player.damage(-def.hp);
-    ui.toast(`🤢 ${def.name} roh gegessen… (-${-def.hp} ❤️)`);
+    ui.toast(`${def.name} roh gegessen… (-${-def.hp} Gesundheit)`);
   } else {
-    ui.toast(`${def.icon} ${def.name} gegessen (+${def.hunger} 🍖)`);
+    ui.toast(`${def.name} gegessen (+${def.hunger} Hunger)`);
   }
   sfx.eat();
 }
@@ -184,7 +184,7 @@ function attack(toolId) {
     sfx.hit();
     const result = animals.hit(animal, dmg, dir);
     if (result.killed) {
-      ui.toast(`☠️ ${result.name} erlegt!`);
+      ui.toast(`${result.name} erlegt!`);
       for (const [id, n] of Object.entries(result.drops)) addItem(id, n);
     }
   }
@@ -202,7 +202,7 @@ function interact() {
   if (fire && (game.inv.fleisch_roh || 0) > 0) {
     removeItem('fleisch_roh', 1);
     addItem('fleisch', 1, true);
-    ui.toast('🍖 Fleisch gebraten!');
+    ui.toast('Fleisch gebraten!');
     sfx.cook();
     refreshInv();
     return;
@@ -212,7 +212,7 @@ function interact() {
     world.sleep();
     player.hp = Math.min(100, player.hp + 25);
     player.hunger = Math.max(0, player.hunger - 8);
-    ui.toast('😴 Gut geschlafen — ein neuer Morgen!');
+    ui.toast('Gut geschlafen — ein neuer Morgen!');
     sfx.sleep();
     saveGame();
   }
@@ -227,16 +227,17 @@ ui.onCraft = (recipe) => {
   if (def.once && (game.inv[recipe.out] || 0) > 0) return;
   for (const [id, n] of Object.entries(recipe.cost)) removeItem(id, n);
   addItem(recipe.out, 1, true);
-  ui.toast(`🛠️ ${def.icon} ${def.name} hergestellt!`);
+  ui.toast(`${def.name} hergestellt!`);
   sfx.craft();
   ui.renderCraft(game.inv);
 };
 
 function openCraft() {
+  stopDesktopAction();
   game.state = 'craft';
   ui.renderCraft(game.inv);
   ui.showCraft(true);
-  document.exitPointerLock();
+  exitPointerLock();
   touch?.show(false);
 }
 
@@ -249,10 +250,18 @@ function closeCraft() {
 // Pointer-Lock ist optional: wenn der Browser ihn verweigert,
 // läuft das Spiel trotzdem (Maus-Look über movementX/Y ohne Lock).
 function lockPointer() {
+  if (touch?.enabled || typeof renderer.domElement.requestPointerLock !== 'function') return;
   try {
     const p = renderer.domElement.requestPointerLock();
     if (p && p.catch) p.catch(() => {});
   } catch { /* Lock nicht verfügbar */ }
+}
+
+function exitPointerLock() {
+  if (typeof document.exitPointerLock !== 'function') return;
+  try {
+    document.exitPointerLock();
+  } catch { /* Auf Mobile-Browsern nicht immer verfügbar */ }
 }
 
 function resumePlaying() {
@@ -281,11 +290,12 @@ player.canLook = () => game.state === 'playing';
 
 function die(cause) {
   if (game.state === 'dead') return;
+  stopDesktopAction();
   game.state = 'dead';
   game.deathCause = cause;
   game.respawnAt = Date.now() + RESPAWN_WAIT;
   sfx.die();
-  document.exitPointerLock();
+  exitPointerLock();
   touch?.show(false);
   ui.showHud(false);
   ui.showOverlay('dead', { days: world.day, cause });
@@ -345,9 +355,9 @@ function newGame() {
   player.hunger = 100;
   player.pos.set(0, terrainHeight(0, 6), 6);
   refreshInv();
-  setTimeout(() => { if (game.state === 'playing') ui.toast('🌳 Schlage Bäume für Holz (Linksklick)'); }, 1500);
-  setTimeout(() => { if (game.state === 'playing') ui.toast('🛠️ Öffne Crafting mit TAB oder C'); }, 5000);
-  setTimeout(() => { if (game.state === 'playing') ui.toast('🫐 Beerensträucher stillen den Hunger'); }, 9000);
+  setTimeout(() => { if (game.state === 'playing') ui.toast('Schlage Bäume für Holz (Linksklick)'); }, 1500);
+  setTimeout(() => { if (game.state === 'playing') ui.toast('Öffne Crafting mit TAB oder C'); }, 5000);
+  setTimeout(() => { if (game.state === 'playing') ui.toast('Beerensträucher stillen den Hunger'); }, 9000);
 }
 
 setInterval(saveGame, 10000);
@@ -362,7 +372,7 @@ addEventListener('keydown', (e) => {
     else if (e.code === 'KeyR') buildings.rotateGhost();
     else if (e.code === 'KeyM') {
       sfx.muted = !sfx.muted;
-      ui.toast(sfx.muted ? '🔇 Ton aus' : '🔊 Ton an');
+      ui.toast(sfx.muted ? 'Ton aus' : 'Ton an');
     } else if (/^Digit[1-9]$/.test(e.code)) selectSlot(+e.code.slice(5) - 1);
     else if (e.code === 'Escape' && !document.pointerLockElement) {
       game.state = 'paused';
@@ -373,11 +383,28 @@ addEventListener('keydown', (e) => {
   }
 });
 
+let desktopActionTimer = null;
+
+function stopDesktopAction() {
+  clearInterval(desktopActionTimer);
+  desktopActionTimer = null;
+}
+
 addEventListener('mousedown', (e) => {
   if (e.button !== 0 || game.state !== 'playing') return;
   if (e.target !== renderer.domElement) return; // UI-Klicks nicht abfangen
   primaryAction();
+  stopDesktopAction();
+  desktopActionTimer = setInterval(() => {
+    if (game.state !== 'playing' || !document.hasFocus()) return stopDesktopAction();
+    primaryAction();
+  }, 480);
 });
+
+addEventListener('mouseup', (e) => {
+  if (e.button === 0) stopDesktopAction();
+});
+addEventListener('blur', stopDesktopAction);
 
 addEventListener('wheel', (e) => {
   if (game.state !== 'playing' || game.hotbar.length < 2) return;
@@ -386,6 +413,12 @@ addEventListener('wheel', (e) => {
 });
 
 addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Safari/iOS kann trotz Pointer-Events eigene Pinch- und Doppeltipp-Gesten starten.
+for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+}
+renderer.domElement.addEventListener('dblclick', (e) => e.preventDefault());
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -429,11 +462,11 @@ function updateHUD() {
   const t = raycastTargets(4.6);
   if (t) {
     if (t.obj.userData.res) {
-      const names = { tree: '🌳 Baum', rock: '🪨 Stein', bush: '🫐 Beerenstrauch' };
+      const names = { tree: 'Baum', rock: 'Stein', bush: 'Beerenstrauch' };
       ui.target(names[t.obj.userData.res.kind]);
     } else if (t.obj.userData.animal) {
       const a = t.obj.userData.animal;
-      ui.target(`${a.def.name} ❤️${a.hp}/${a.def.hp}`);
+      ui.target(`${a.def.name} · ${a.hp}/${a.def.hp} Gesundheit`);
     }
   } else {
     ui.target(null);
@@ -443,12 +476,12 @@ function updateHUD() {
   let prompt = null;
   const fire = buildings.nearest('campfire', player.pos, 3.5);
   const tent = buildings.nearest('tent', player.pos, 3.2);
-  if (fire && (game.inv.fleisch_roh || 0) > 0) prompt = 'E — Fleisch braten 🍖';
-  else if (tent && world.night) prompt = 'E — Schlafen bis zum Morgen 😴';
+  if (fire && (game.inv.fleisch_roh || 0) > 0) prompt = 'E — Fleisch braten';
+  else if (tent && world.night) prompt = 'E — Schlafen bis zum Morgen';
   else if (ITEMS[selected()].type === 'placeable') prompt = 'Linksklick — Platzieren · R — Drehen';
-  else if (starving) prompt = '⚠️ Du verhungerst! Iss etwas!';
+  else if (starving) prompt = 'Du verhungerst! Iss etwas!';
   ui.prompt(prompt);
-  touch?.setInteract((fire && (game.inv.fleisch_roh || 0) > 0) ? '🍖' : (tent && world.night) ? '😴' : null);
+  touch?.setInteract((fire && (game.inv.fleisch_roh || 0) > 0) ? 'food' : (tent && world.night) ? 'tent' : null);
 }
 
 // ---------- Game-Loop ----------
@@ -472,11 +505,11 @@ function tick(dt) {
     world.update(dt, player.pos);
     if (world.nightfall && !game.firstNightHintShown) {
       game.firstNightHintShown = true;
-      ui.toast('🌙 Die Nacht bricht herein… Wölfe werden aggressiv! 🐺', 'hint');
+      ui.toast('Die Nacht bricht herein… Wölfe werden aggressiv!', 'hint');
     }
     player.update(dt);
     const starve = player.updateStats(dt);
-    if (player.hp <= 0) die(starve === 'starving' ? 'Du bist verhungert. 🍖' : 'Ein Wolf hat dich erwischt. 🐺');
+    if (player.hp <= 0) die(starve === 'starving' ? 'Du bist verhungert.' : 'Ein Wolf hat dich erwischt.');
 
     resources.update(dt);
     buildings.update(dt);
@@ -485,6 +518,7 @@ function tick(dt) {
       playerPos: player.pos,
       night: world.night,
       fires: buildings.fires,
+      animalObstacles: buildings.animalObstacles,
       time: now / 1000,
       hurtPlayer: (n) => player.damage(n),
     });
@@ -515,6 +549,7 @@ touch = new TouchControls(renderer.domElement, player, {
   toggleCraft: () => game.state === 'craft' ? closeCraft() : game.state === 'playing' && openCraft(),
   pause: () => {
     if (game.state !== 'playing') return;
+    stopDesktopAction();
     game.state = 'paused';
     ui.showOverlay('pause');
     touch.show(false);

@@ -9,7 +9,7 @@ html, body {
   user-select: none;
 }
 
-#app, #app canvas { position: fixed; inset: 0; display: block; }
+#app, #app canvas { position: fixed; inset: 0; display: block; touch-action: none; }
 
 .hidden { display: none !important; }
 
@@ -67,7 +67,7 @@ html, body {
   backdrop-filter: blur(4px);
 }
 .bar { display: flex; align-items: center; gap: 8px; }
-.bicon { font-size: 15px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+.bicon { color: #fff; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
 .track {
   width: 170px; height: 13px;
   background: rgba(0,0,0,.45); border-radius: 999px;
@@ -126,7 +126,7 @@ html, body {
   transform: scale(1.12);
   background: rgba(40, 44, 30, .78);
 }
-.slot .icon { font-size: 26px; }
+.itemIcon { display: grid; place-items: center; }
 .slot .key {
   position: absolute; top: 2px; left: 5px;
   font-size: 10px; color: rgba(255,255,255,.55); font-weight: 700;
@@ -238,6 +238,15 @@ html, body {
 .bigBtn.primary { background: #ffd166; color: #2b2b1a; border-color: transparent; }
 .bigBtn.primary:hover { filter: brightness(1.08); }
 .bigBtn:disabled { opacity: .55; cursor: default; transform: none; filter: grayscale(.35); }
+.icon { width: 1.25em; height: 1.25em; display: inline-block; vertical-align: -.2em; }
+.bicon .icon { width: 17px; height: 17px; }
+.itemIcon .icon, .ric .icon { width: 28px; height: 28px; }
+.mat .icon, .invItem .icon { width: 21px; height: 21px; }
+.chip .icon { width: 14px; height: 14px; margin-right: 2px; }
+.bigBtn .icon, h2 .icon { margin-right: 5px; }
+.panel h1 .icon { width: .9em; height: .9em; }
+.touchBtn .icon, .touchTop .icon { width: 25px; height: 25px; }
+.touchBtn.action .icon { width: 31px; height: 31px; }
 
 .controls {
   margin: 0 auto; border-collapse: collapse;

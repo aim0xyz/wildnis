@@ -1,3 +1,5 @@
+import { icon as svgIcon } from './icons.js';
+
 // Touch-Steuerung: virtueller Joystick (links), Wisch-Kamera (rechts),
 // Action-/Sprung-/Interaktions-Buttons. Nutzt Pointer-Events (Multi-Touch via pointerId).
 
@@ -168,13 +170,19 @@ export class TouchControls {
   }
 
   setActionIcon(icon) {
-    if (this.enabled && this.btnAction.textContent !== icon) this.btnAction.textContent = icon;
+    if (this.enabled && this.btnAction.dataset.currentIcon !== icon) {
+      this.btnAction.dataset.currentIcon = icon;
+      this.btnAction.innerHTML = svgIcon(icon);
+    }
   }
 
   setInteract(icon) {
     if (!this.enabled) return;
     this.btnInteract.classList.toggle('hidden', !icon);
-    if (icon && this.btnInteract.textContent !== icon) this.btnInteract.textContent = icon;
+    if (icon && this.btnInteract.dataset.currentIcon !== icon) {
+      this.btnInteract.dataset.currentIcon = icon;
+      this.btnInteract.innerHTML = svgIcon(icon);
+    }
   }
 
   setRotateVisible(v) {

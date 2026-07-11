@@ -172,8 +172,8 @@ export class Resources {
     res.shakeT = 0.3;
 
     let hint = null;
-    if (res.kind === 'rock' && toolId !== 'spitzhacke') hint = 'Mit einer ⛏️ Spitzhacke geht das schneller!';
-    if (res.kind === 'tree' && toolId !== 'axt') hint = 'Mit einer 🪓 Axt geht das schneller!';
+    if (res.kind === 'rock' && toolId !== 'spitzhacke') hint = 'Mit einer Spitzhacke geht das schneller!';
+    if (res.kind === 'tree' && toolId !== 'axt') hint = 'Mit einer Axt geht das schneller!';
 
     if (res.hp <= 0) {
       res.alive = false;

@@ -8,7 +8,8 @@ function std(color) {
 const DEFS = {
   campfire: { name: 'Lagerfeuer', r: 0.9, fire: true, lightColor: 0xffa040, lightI: 2.4, lightD: 16 },
   torch: { name: 'Fackel', r: 0.2, fire: true, lightColor: 0xffb050, lightI: 1.3, lightD: 9 },
-  wall: { name: 'Holzwand', r: 1.0 },
+  wall: { name: 'Holzwand', r: 0.45, connectable: true, blocksAnimals: true, blocksPlayer: true },
+  gate: { name: 'Wildtor', r: 0.45, connectable: true, blocksAnimals: true, blocksPlayer: false },
   tent: { name: 'Zelt', r: 1.5, spawn: true },
 };
 
@@ -80,6 +81,27 @@ function buildWall() {
   return g;
 }
 
+function buildGate() {
+  const g = new THREE.Group();
+  for (const x of [-1.05, 1.05]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 2.15, 5), std(0x5f4026));
+    post.position.set(x, 1.05, 0);
+    post.castShadow = true;
+    g.add(post);
+  }
+  for (const y of [0.38, 1.05, 1.72]) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.16, 0.18), std(0x8a5a32));
+    beam.position.y = y;
+    beam.castShadow = true;
+    g.add(beam);
+  }
+  const brace = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.13, 0.16), std(0x704a2b));
+  brace.position.y = 1.05;
+  brace.rotation.z = -0.58;
+  g.add(brace);
+  return g;
+}
+
 function buildTent() {
   const g = new THREE.Group();
   // Tipi
@@ -102,7 +124,7 @@ function buildTent() {
   return g;
 }
 
-const BUILDERS = { campfire: buildCampfire, torch: buildTorch, wall: buildWall, tent: buildTent };
+const BUILDERS = { campfire: buildCampfire, torch: buildTorch, wall: buildWall, gate: buildGate, tent: buildTent };
 
 export class Buildings {
   constructor(scene) {
@@ -111,6 +133,7 @@ export class Buildings {
     scene.add(this.group);
     this.placed = []; // {type, x, z, rot, group}
     this.obstacles = []; // {x, z, r}
+    this.animalObstacles = []; // Wände und Tore; Tore bleiben für Spieler passierbar
     this.fires = []; // {x, z}
     this.lights = []; // {light, base}
     this.onTentPlaced = null;
@@ -154,7 +177,8 @@ export class Buildings {
       this.ghostValid = false;
       return;
     }
-    const p = hits[0].point;
+    const p = hits[0].point.clone();
+    if (DEFS[this.ghostType].connectable) this.snapToWallEnd(p);
     const h = terrainHeight(p.x, p.z);
     this.ghost.visible = true;
     this.ghost.position.set(p.x, h, p.z);
@@ -170,6 +194,28 @@ export class Buildings {
     this.ghostValid = valid;
     const mat = valid ? this.ghostMatOk : this.ghostMatBad;
     this.ghost.traverse((m) => { if (m.isMesh) m.material = mat; });
+  }
+
+  snapToWallEnd(p) {
+    const half = 1.1;
+    const ax = Math.cos(this.ghostRot), az = -Math.sin(this.ghostRot);
+    let best = null;
+    let bestD = 0.9;
+    for (const b of this.placed) {
+      if (!DEFS[b.type].connectable) continue;
+      const bx = Math.cos(b.rot), bz = -Math.sin(b.rot);
+      for (const side of [-1, 1]) {
+        const ex = b.x + bx * half * side;
+        const ez = b.z + bz * half * side;
+        for (const ownSide of [-1, 1]) {
+          const cx = ex - ax * half * ownSide;
+          const cz = ez - az * half * ownSide;
+          const d = Math.hypot(cx - p.x, cz - p.z);
+          if (d < bestD) { bestD = d; best = { x: cx, z: cz }; }
+        }
+      }
+    }
+    if (best) { p.x = best.x; p.z = best.z; }
   }
 
   rotateGhost() {
@@ -189,7 +235,16 @@ export class Buildings {
     g.rotation.y = rot;
     this.group.add(g);
     this.placed.push({ type, x, z, rot, group: g });
-    this.obstacles.push({ x, z, r: def.r });
+    if (def.connectable) {
+      const ax = Math.cos(rot), az = -Math.sin(rot);
+      for (const offset of [-0.78, 0, 0.78]) {
+        const obstacle = { x: x + ax * offset, z: z + az * offset, r: 0.38 };
+        if (def.blocksPlayer) this.obstacles.push(obstacle);
+        if (def.blocksAnimals) this.animalObstacles.push({ ...obstacle, r: 0.5 });
+      }
+    } else {
+      this.obstacles.push({ x, z, r: def.r });
+    }
     if (def.fire) {
       this.fires.push({ x, z });
       const light = new THREE.PointLight(def.lightColor, def.lightI, def.lightD, 1.6);

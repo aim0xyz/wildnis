@@ -193,7 +193,12 @@ class Animal {
       nz = THREE.MathUtils.clamp(nz, -WORLD_RADIUS + 6, WORLD_RADIUS - 6);
       // Wasser meiden (Wölfe dürfen durch)
       const nh = terrainHeight(nx, nz);
-      if (nh < WATER_Y + 0.1 && this.kind !== 'wolf') {
+      const blocked = ctx.animalObstacles?.some((o) => Math.hypot(nx - o.x, nz - o.z) < o.r + 0.42);
+      if (blocked) {
+        if (this.kind !== 'wolf' || !this.aggro) this.pickWander(now);
+        speed = 0;
+        this.moving = false;
+      } else if (nh < WATER_Y + 0.1 && this.kind !== 'wolf') {
         this.pickWander(now);
       } else {
         p.x = nx; p.z = nz;
