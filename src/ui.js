@@ -31,6 +31,7 @@ export class UI {
     this.btnPlay = $('btnPlay');
     this.btnNew = $('btnNew');
     this.vignette = $('vignette');
+    this.sleepFade = $('sleepFade');
     this.selName = $('selName');
     this._selNameTimer = null;
     this.onCraft = null;
@@ -130,6 +131,17 @@ export class UI {
     this.vignette.classList.remove('flash');
     void this.vignette.offsetWidth; // Animation neu starten
     this.vignette.classList.add('flash');
+  }
+
+  sleepTransition(onDark, onDone) {
+    this.sleepFade.classList.remove('closingEyes');
+    void this.sleepFade.offsetWidth;
+    this.sleepFade.classList.add('closingEyes');
+    setTimeout(() => onDark?.(), 500);
+    setTimeout(() => {
+      this.sleepFade.classList.remove('closingEyes');
+      onDone?.();
+    }, 1150);
   }
 
   // ---- Crafting-Panel ----

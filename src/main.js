@@ -62,7 +62,7 @@ player.obstacleSets = [resources.obstacles, buildings.obstacles, landmarks.obsta
 player.platforms = landmarks.platforms;
 
 const game = {
-  state: 'menu', // menu | playing | paused | craft | dead
+  state: 'menu', // menu | playing | sleeping | paused | craft | dead
   inv: {},
   hotbar: ['hand'],
   hotIdx: 0,
@@ -371,12 +371,18 @@ function interact() {
   }
   const tent = buildings.nearest('tent', player.pos, 3.2);
   if (tent && world.night) {
-    world.sleep();
-    player.hp = Math.min(100, player.hp + 25);
-    player.hunger = Math.max(0, player.hunger - 8);
-    ui.toast('Gut geschlafen — ein neuer Morgen!');
+    game.state = 'sleeping';
+    stopDesktopAction();
     sfx.sleep();
-    saveGame();
+    ui.sleepTransition(() => {
+      world.sleep();
+      player.hp = Math.min(100, player.hp + 25);
+      player.hunger = Math.max(0, player.hunger - 8);
+      saveGame();
+    }, () => {
+      game.state = 'playing';
+      ui.toast('Gut geschlafen — ein neuer Morgen!');
+    });
   }
 }
 

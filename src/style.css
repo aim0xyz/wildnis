@@ -115,6 +115,17 @@ html, body {
 #objectivePanel.done { border-color: #6edb86; }
 #objectivePanel.done > .icon { color: #6edb86; }
 
+#sleepFade {
+  position: fixed; inset: 0; z-index: 90; pointer-events: none;
+  background: #000; opacity: 0;
+}
+#sleepFade.closingEyes { animation: closingEyes 1.15s ease-in-out both; }
+@keyframes closingEyes {
+  0% { opacity: 0; }
+  38%, 62% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 .discoveryCard {
   width: min(420px, calc(100vw - 28px)); padding: 18px 20px; margin: 8px auto;
   color: #f7f1df; background: linear-gradient(145deg, rgba(24,31,25,.96), rgba(47,42,29,.96));
