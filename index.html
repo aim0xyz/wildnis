@@ -19,6 +19,7 @@
     <div id="statsPanel">
       <div class="bar hp"><span class="bicon" data-icon="heart"></span><div class="track"><div class="fill" id="hpFill"></div></div></div>
       <div class="bar hunger"><span class="bicon" data-icon="food"></span><div class="track"><div class="fill" id="hungerFill"></div></div></div>
+      <div class="bar oxygen hidden" id="oxygenBar"><span class="bicon" data-icon="bubbles"></span><div class="track"><div class="fill" id="oxygenFill"></div></div></div>
     </div>
 
     <div id="clockPanel">
@@ -27,6 +28,11 @@
     </div>
 
     <div id="matPanel"></div>
+
+    <div id="objectivePanel">
+      <span id="objectiveIcon" data-icon="sprout"></span>
+      <div><small>AKTUELLE AUFGABE</small><b id="objectiveText"></b></div>
+    </div>
 
     <div id="selName"></div>
     <div id="hotbar"></div>
@@ -56,6 +62,7 @@
         <tr><td>W A S D</td><td>Laufen</td></tr>
         <tr><td>Shift</td><td>Sprinten</td></tr>
         <tr><td>Leertaste</td><td>Springen</td></tr>
+        <tr><td>Q / Leertaste</td><td>Abtauchen / Auftauchen</td></tr>
         <tr><td>Maus</td><td>Umsehen</td></tr>
         <tr><td>Linksklick</td><td>Sammeln · Kämpfen · Essen · Bauen</td></tr>
         <tr><td>E</td><td>Interagieren (Braten / Schlafen)</td></tr>
@@ -68,6 +75,7 @@
   </div>
 
   <div id="vignette"></div>
+  <div id="underwaterOverlay"></div>
 
   <div id="touchUI" class="hidden" aria-label="Touch-Steuerung">
     <button id="btnPauseM" class="touchTop" aria-label="Pause" data-icon="pause"></button>
@@ -76,6 +84,7 @@
     <button id="btnRotate" class="touchBtn hidden" aria-label="Bauteil drehen" data-icon="rotate"></button>
     <button id="btnInteract" class="touchBtn hidden" aria-label="Interagieren">E</button>
     <button id="btnJump" class="touchBtn" aria-label="Springen" data-icon="jump"></button>
+    <button id="btnDive" class="touchBtn hidden" aria-label="Abtauchen" data-icon="dive"></button>
     <button id="btnAction" class="touchBtn action" aria-label="Aktion" data-icon="fist"></button>
   </div>
 

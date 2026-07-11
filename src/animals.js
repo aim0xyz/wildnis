@@ -189,6 +189,23 @@ class Animal {
       dirX /= len; dirZ /= len;
       let nx = p.x + dirX * speed * dt;
       let nz = p.z + dirZ * speed * dt;
+
+      // Wölfe dürfen angreifen, aber nicht in den Körper des Spielers laufen.
+      if (this.kind === 'wolf') {
+        let px = nx - ctx.playerPos.x;
+        let pz = nz - ctx.playerPos.z;
+        let playerDist = Math.hypot(px, pz);
+        const minPlayerDist = 1.55;
+        if (playerDist < minPlayerDist) {
+          if (playerDist < 0.001) {
+            px = -dirX || 1;
+            pz = -dirZ || 0;
+            playerDist = Math.hypot(px, pz);
+          }
+          nx = ctx.playerPos.x + (px / playerDist) * minPlayerDist;
+          nz = ctx.playerPos.z + (pz / playerDist) * minPlayerDist;
+        }
+      }
       nx = THREE.MathUtils.clamp(nx, -WORLD_RADIUS + 6, WORLD_RADIUS - 6);
       nz = THREE.MathUtils.clamp(nz, -WORLD_RADIUS + 6, WORLD_RADIUS - 6);
       // Wasser meiden (Wölfe dürfen durch)

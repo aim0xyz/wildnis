@@ -30,6 +30,7 @@ export class TouchControls {
     this.btnAction = document.getElementById('btnAction');
     this.btnInteract = document.getElementById('btnInteract');
     this.btnJump = document.getElementById('btnJump');
+    this.btnDive = document.getElementById('btnDive');
     this.btnRotate = document.getElementById('btnRotate');
 
     this.bindCanvas(canvas);
@@ -128,6 +129,9 @@ export class TouchControls {
     bind(this.btnJump,
       () => { this.player.keys.Space = true; },
       () => { this.player.keys.Space = false; });
+    bind(this.btnDive,
+      () => { this.player.keys.KeyQ = true; },
+      () => { this.player.keys.KeyQ = false; });
 
     bind(this.btnInteract, () => this.actions.interact());
     bind(this.btnRotate, () => this.actions.rotate());
@@ -166,6 +170,7 @@ export class TouchControls {
       clearInterval(this.repeatTimer);
       this.actionPid = null;
       this.player.keys.Space = false;
+      this.player.keys.KeyQ = false;
     }
   }
 
@@ -187,5 +192,9 @@ export class TouchControls {
 
   setRotateVisible(v) {
     if (this.enabled) this.btnRotate.classList.toggle('hidden', !v);
+  }
+
+  setSwimming(v) {
+    if (this.enabled) this.btnDive.classList.toggle('hidden', !v);
   }
 }

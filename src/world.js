@@ -5,7 +5,8 @@ export const WATER_Y = 0;
 export const WORLD_RADIUS = 230;
 const SIZE = 480;
 const SEGS = 110;
-const DAY_LENGTH = 300; // Sekunden pro Tag
+const DAY_SECONDS = 8 * 60;
+const NIGHT_SECONDS = 3 * 60;
 
 export function terrainHeight(x, z) {
   let h = (fbm(x * 0.0085 + 8.3, z * 0.0085 + 3.1) - 0.47) * 26;
@@ -34,6 +35,8 @@ const C_SNOW = new THREE.Color(0xf2f4f8);
 const SKY_DAY = new THREE.Color(0x7ec8e8);
 const SKY_DUSK = new THREE.Color(0xf79862);
 const SKY_NIGHT = new THREE.Color(0x0d1226);
+const SUN_DAY = new THREE.Color(0xfff2cc);
+const SUN_DUSK = new THREE.Color(0xff9d5c);
 
 export class World {
   constructor(scene) {
@@ -51,6 +54,9 @@ export class World {
     this.buildLights();
     this.buildSky();
     this.buildGrass();
+    this.buildFlowers();
+    this.buildReeds();
+    this.buildFireflies();
     this.buildClouds();
   }
 
@@ -106,8 +112,9 @@ export class World {
 
   buildWater() {
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x3d85c6, transparent: true, opacity: 0.72,
-      roughness: 0.25, metalness: 0.1, flatShading: true,
+      color: 0x2f86bd, transparent: true, opacity: 0.76,
+      roughness: 0.18, metalness: 0.08, flatShading: true,
+      emissive: 0x06263b, emissiveIntensity: 0.16,
     });
     this.water = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200, 24, 24), mat);
     this.water.rotation.x = -Math.PI / 2;
@@ -121,13 +128,13 @@ export class World {
 
     this.sun = new THREE.DirectionalLight(0xfff2cc, 2.4);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
-    this.sun.shadow.camera.left = -60;
-    this.sun.shadow.camera.right = 60;
-    this.sun.shadow.camera.top = 60;
-    this.sun.shadow.camera.bottom = -60;
+    this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.camera.left = -48;
+    this.sun.shadow.camera.right = 48;
+    this.sun.shadow.camera.top = 48;
+    this.sun.shadow.camera.bottom = -48;
     this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 300;
+    this.sun.shadow.camera.far = 220;
     this.sun.shadow.bias = -0.0005;
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
@@ -208,15 +215,91 @@ export class World {
     this.scene.add(mesh);
   }
 
+  buildFlowers() {
+    const rand = mulberry32(5050);
+    const geo = new THREE.ConeGeometry(0.1, 0.38, 5);
+    geo.translate(0, 0.18, 0);
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ flatShading: true, roughness: 1 }), 420);
+    const matrix = new THREE.Matrix4(), pos = new THREE.Vector3(), scale = new THREE.Vector3();
+    const quat = new THREE.Quaternion(), col = new THREE.Color();
+    const palette = [0xffd166, 0xf78fb3, 0xb8e986, 0xd8c7ff, 0xff8a65];
+    let placed = 0;
+    for (let tries = 0; placed < 420 && tries < 10000; tries++) {
+      const x = (rand() - 0.5) * 390, z = (rand() - 0.5) * 390;
+      const h = terrainHeight(x, z);
+      if (h < 0.8 || h > 6.5 || terrainSlope(x, z) > 0.38) continue;
+      pos.set(x, h, z);
+      const s = 0.65 + rand() * 0.9;
+      scale.set(s, s, s);
+      matrix.compose(pos, quat, scale);
+      mesh.setMatrixAt(placed, matrix);
+      col.setHex(palette[Math.floor(rand() * palette.length)]);
+      mesh.setColorAt(placed, col);
+      placed++;
+    }
+    mesh.count = placed;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    this.scene.add(mesh);
+  }
+
+  buildReeds() {
+    const rand = mulberry32(6060);
+    const geo = new THREE.CylinderGeometry(0.025, 0.035, 0.9, 5);
+    geo.translate(0, 0.42, 0);
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: 0x668f45, flatShading: true, roughness: 1 }), 520);
+    const matrix = new THREE.Matrix4(), pos = new THREE.Vector3(), scale = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    let placed = 0;
+    for (let tries = 0; placed < 520 && tries < 18000; tries++) {
+      const x = (rand() - 0.5) * 430, z = (rand() - 0.5) * 430;
+      const h = terrainHeight(x, z);
+      if (h < -0.18 || h > 0.48 || terrainSlope(x, z) > 0.5) continue;
+      pos.set(x, h, z);
+      const s = 0.65 + rand() * 0.8;
+      scale.set(s, s, s);
+      matrix.compose(pos, quat, scale);
+      mesh.setMatrixAt(placed++, matrix);
+    }
+    mesh.count = placed;
+    mesh.instanceMatrix.needsUpdate = true;
+    this.scene.add(mesh);
+  }
+
+  buildFireflies() {
+    const rand = mulberry32(8080);
+    const count = 130;
+    const arr = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      let x, z, h;
+      do {
+        x = (rand() - 0.5) * 180;
+        z = (rand() - 0.5) * 180;
+        h = terrainHeight(x, z);
+      } while (h < 0.7);
+      arr[i * 3] = x;
+      arr[i * 3 + 1] = h + 0.45 + rand() * 1.8;
+      arr[i * 3 + 2] = z;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    this.fireflies = new THREE.Points(geo, new THREE.PointsMaterial({
+      color: 0xffee78, size: 3.2, sizeAttenuation: false,
+      transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    this.scene.add(this.fireflies);
+  }
+
   buildClouds() {
     this.clouds = [];
     const rand = mulberry32(777);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, flatShading: true });
+    const mat = new THREE.MeshStandardMaterial({ color: 0xf5f7f4, transparent: true, opacity: 0.82, flatShading: true, roughness: 1 });
     for (let i = 0; i < 9; i++) {
       const grp = new THREE.Group();
       const parts = 3 + Math.floor(rand() * 3);
       for (let k = 0; k < parts; k++) {
-        const b = new THREE.Mesh(new THREE.BoxGeometry(8 + rand() * 10, 2.2 + rand() * 1.5, 5 + rand() * 6), mat);
+        const b = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), mat);
+        b.scale.set(5 + rand() * 7, 1.7 + rand() * 1.3, 3.5 + rand() * 4.5);
         b.position.set((rand() - 0.5) * 14, (rand() - 0.5) * 1.5, (rand() - 0.5) * 8);
         grp.add(b);
       }
@@ -235,7 +318,8 @@ export class World {
 
   update(dt, playerPos) {
     const prevT = this.t;
-    const rate = (this.night ? 1.5 : 1) / DAY_LENGTH;
+    // Je ungefähr eine Hälfte des normierten Zyklus ist hell bzw. dunkel.
+    const rate = this.night ? 0.5 / NIGHT_SECONDS : 0.5 / DAY_SECONDS;
     this.t += dt * rate;
     if (this.t >= 1) { this.t -= 1; this.day++; }
 
@@ -252,6 +336,7 @@ export class World {
     this.sun.position.copy(playerPos).addScaledVector(sunDir, 100);
     this.sun.target.position.copy(playerPos);
     this.sun.intensity = THREE.MathUtils.clamp(elev * 3.2, 0, 2.6);
+    this.sun.color.lerpColors(SUN_DUSK, SUN_DAY, THREE.MathUtils.clamp(elev * 3, 0, 1));
     this.sunMesh.position.copy(playerPos).addScaledVector(sunDir, 380);
 
     const moonDir = sunDir.clone().negate();
@@ -274,6 +359,9 @@ export class World {
 
     this.stars.material.opacity = THREE.MathUtils.clamp(-elev * 4, 0, 1);
     this.stars.position.set(playerPos.x, 0, playerPos.z);
+    this.fireflies.material.opacity = THREE.MathUtils.clamp((-elev - 0.02) * 5, 0, 0.9);
+    this.fireflies.rotation.y += dt * 0.008;
+    this.fireflies.position.y = Math.sin(performance.now() * 0.0007) * 0.12;
 
     // Wolken driften
     for (const c of this.clouds) {
@@ -282,5 +370,6 @@ export class World {
     }
 
     this.water.position.y = WATER_Y + Math.sin(performance.now() * 0.001) * 0.06;
+    this.water.material.color.setHex(elev < -0.05 ? 0x153f67 : elev < 0.2 ? 0x397da2 : 0x2f86bd);
   }
 }

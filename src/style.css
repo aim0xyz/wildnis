@@ -76,6 +76,7 @@ html, body {
 .fill { height: 100%; border-radius: 999px; transition: width .25s; }
 .hp .fill { background: linear-gradient(90deg, #e53935, #ff7043); }
 .hunger .fill { background: linear-gradient(90deg, #fb8c00, #ffca28); }
+.oxygen .fill { background: linear-gradient(90deg, #1e88e5, #64d8ff); }
 .track.warn { outline: 2px solid #ff5252; animation: pulse .8s infinite alternate; }
 @keyframes pulse { to { outline-color: transparent; } }
 
@@ -98,6 +99,33 @@ html, body {
   padding: 12px 14px; border-radius: 14px;
   backdrop-filter: blur(4px);
 }
+
+#objectivePanel {
+  position: absolute; left: 16px; bottom: 92px;
+  display: flex; align-items: center; gap: 10px;
+  max-width: 330px; padding: 10px 14px;
+  color: #fff; background: rgba(18,22,16,.68);
+  border-left: 3px solid #ffd166; border-radius: 10px;
+  backdrop-filter: blur(4px);
+}
+#objectivePanel > .icon { width: 24px; height: 24px; color: #ffd166; flex: 0 0 auto; }
+#objectivePanel div { display: flex; flex-direction: column; gap: 2px; }
+#objectivePanel small { color: rgba(255,255,255,.58); font-size: 9px; font-weight: 800; letter-spacing: .8px; }
+#objectivePanel b { font-size: 13px; line-height: 1.25; }
+#objectivePanel.done { border-color: #6edb86; }
+#objectivePanel.done > .icon { color: #6edb86; }
+
+.discoveryCard {
+  width: min(420px, calc(100vw - 28px)); padding: 18px 20px; margin: 8px auto;
+  color: #f7f1df; background: linear-gradient(145deg, rgba(24,31,25,.96), rgba(47,42,29,.96));
+  border: 1px solid rgba(255,209,102,.65); border-radius: 12px;
+  box-shadow: 0 12px 45px rgba(0,0,0,.45); text-align: center;
+  animation: toastIn .35s ease-out;
+}
+.discoveryCard small { display: block; color: #ffd166; font-size: 10px; font-weight: 900; letter-spacing: 1.2px; }
+.discoveryCard strong { display: block; margin-top: 7px; font-size: 20px; }
+.discoveryCard p { margin: 8px 0 0; color: rgba(255,255,255,.76); font-size: 13px; line-height: 1.45; }
+.discoveryCard.out { opacity: 0; transform: translateY(-8px); transition: .6s; }
 .mat {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; color: #fff; font-size: 15px; min-width: 62px;
@@ -126,7 +154,11 @@ html, body {
   transform: scale(1.12);
   background: rgba(40, 44, 30, .78);
 }
-.itemIcon { display: grid; place-items: center; }
+.itemIcon {
+  display: grid; place-items: center;
+  color: #fff;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.8));
+}
 .slot .key {
   position: absolute; top: 2px; left: 5px;
   font-size: 10px; color: rgba(255,255,255,.55); font-weight: 700;
@@ -241,7 +273,7 @@ html, body {
 .icon { width: 1.25em; height: 1.25em; display: inline-block; vertical-align: -.2em; }
 .bicon .icon { width: 17px; height: 17px; }
 .itemIcon .icon, .ric .icon { width: 28px; height: 28px; }
-.mat .icon, .invItem .icon { width: 21px; height: 21px; }
+.mat .icon, .invItem .icon { width: 21px; height: 21px; color: #fff; }
 .chip .icon { width: 14px; height: 14px; margin-right: 2px; }
 .bigBtn .icon, h2 .icon { margin-right: 5px; }
 .panel h1 .icon { width: .9em; height: .9em; }
@@ -266,6 +298,12 @@ html, body {
 }
 #vignette.flash { animation: dmg .5s ease-out; }
 @keyframes dmg { 0% { opacity: 1; } 100% { opacity: 0; } }
+#underwaterOverlay {
+  position: fixed; inset: 0; z-index: 4; pointer-events: none;
+  background: linear-gradient(rgba(15,92,145,.28), rgba(4,38,72,.5));
+  opacity: 0; transition: opacity .25s;
+}
+body.underwater #underwaterOverlay { opacity: 1; }
 
 /* ---------- Mobile Touch-Steuerung ---------- */
 #touchUI { position: fixed; inset: 0; z-index: 12; pointer-events: none; touch-action: none; }
@@ -290,6 +328,7 @@ html, body {
 .touchBtn { width: 58px; height: 58px; border-radius: 50%; font-size: 24px; }
 .touchBtn.action { width: 72px; height: 72px; right: 22px; bottom: 26px; font-size: 29px; }
 #btnJump { right: 105px; bottom: 91px; }
+#btnDive { right: 176px; bottom: 91px; }
 #btnInteract { right: 112px; bottom: 20px; }
 #btnRotate { right: 28px; bottom: 112px; }
 .touchTop { top: max(12px, env(safe-area-inset-top)); width: 46px; height: 40px; border-radius: 12px; font-size: 18px; }
@@ -307,6 +346,8 @@ body.touch #prompt { bottom: 88px; font-size: 13px; }
   .track { width: 108px; }
   #clockPanel { top: max(10px, env(safe-area-inset-top)); }
   #matPanel { top: 58px; right: 10px; padding: 8px 10px; }
+  #objectivePanel { top: auto; bottom: 178px; left: 10px; max-width: 245px; padding: 8px 10px; }
+  #objectivePanel b { font-size: 11px; }
   .panel { padding: 28px 22px; }
   .panel h1 { font-size: 34px; }
   .craftBox { width: 96vw; max-height: 92vh; padding: 16px; }

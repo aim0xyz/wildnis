@@ -9,9 +9,14 @@ export class UI {
     this.hud = $('hud');
     this.hpFill = $('hpFill');
     this.hungerFill = $('hungerFill');
+    this.oxygenFill = $('oxygenFill');
+    this.oxygenBar = $('oxygenBar');
     this.dayLabel = $('dayLabel');
     this.timeIcon = $('timeIcon');
     this.matPanel = $('matPanel');
+    this.objectivePanel = $('objectivePanel');
+    this.objectiveText = $('objectiveText');
+    this.objectiveIcon = $('objectiveIcon');
     this.hotbarEl = $('hotbar');
     this.toasts = $('toasts');
     this.promptEl = $('prompt');
@@ -36,10 +41,12 @@ export class UI {
     this.hud.classList.toggle('hidden', !show);
   }
 
-  setBars(hp, hunger, starving) {
+  setBars(hp, hunger, starving, oxygen = 100, showOxygen = false) {
     this.hpFill.style.width = `${hp}%`;
     this.hungerFill.style.width = `${hunger}%`;
     this.hungerFill.parentElement.classList.toggle('warn', starving);
+    this.oxygenFill.style.width = `${oxygen}%`;
+    this.oxygenBar.classList.toggle('hidden', !showOxygen);
   }
 
   setClock(day, elevation) {
@@ -52,6 +59,12 @@ export class UI {
     this.matPanel.innerHTML = mats
       .map((id) => `<div class="mat"><span>${icon(ITEMS[id].icon)}</span><b>${inv[id] || 0}</b></div>`)
       .join('');
+  }
+
+  setObjective(text, iconName = 'sprout', done = false) {
+    this.objectiveText.textContent = text;
+    this.objectiveIcon.innerHTML = icon(iconName);
+    this.objectivePanel.classList.toggle('done', done);
   }
 
   renderHotbar(hotbar, idx, inv) {
@@ -91,6 +104,17 @@ export class UI {
       el.classList.add('out');
       setTimeout(() => el.remove(), 400);
     }, 2800);
+  }
+
+  discovery(title, story, found, total) {
+    const el = document.createElement('div');
+    el.className = 'discoveryCard';
+    el.innerHTML = `<small>CHRONIK DER WILDNIS · ${found}/${total}</small><strong>${title}</strong><p>${story}</p>`;
+    this.toasts.appendChild(el);
+    setTimeout(() => {
+      el.classList.add('out');
+      setTimeout(() => el.remove(), 600);
+    }, 6200);
   }
 
   prompt(text) {

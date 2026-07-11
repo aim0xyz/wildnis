@@ -6,7 +6,7 @@ function std(color) {
 }
 
 const DEFS = {
-  campfire: { name: 'Lagerfeuer', r: 0.9, fire: true, lightColor: 0xffa040, lightI: 2.4, lightD: 16 },
+  campfire: { name: 'Lagerfeuer', r: 0.9, fire: true, blocksPlayer: false, lightColor: 0xffa040, lightI: 2.4, lightD: 16 },
   torch: { name: 'Fackel', r: 0.2, fire: true, lightColor: 0xffb050, lightI: 1.3, lightD: 9 },
   wall: { name: 'Holzwand', r: 0.45, connectable: true, blocksAnimals: true, blocksPlayer: true },
   gate: { name: 'Wildtor', r: 0.45, connectable: true, blocksAnimals: true, blocksPlayer: false },
@@ -89,16 +89,20 @@ function buildGate() {
     post.castShadow = true;
     g.add(post);
   }
+  const hinge = new THREE.Group();
+  hinge.position.x = -0.95;
   for (const y of [0.38, 1.05, 1.72]) {
     const beam = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.16, 0.18), std(0x8a5a32));
-    beam.position.y = y;
+    beam.position.set(0.95, y, 0);
     beam.castShadow = true;
-    g.add(beam);
+    hinge.add(beam);
   }
   const brace = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.13, 0.16), std(0x704a2b));
-  brace.position.y = 1.05;
+  brace.position.set(0.95, 1.05, 0);
   brace.rotation.z = -0.58;
-  g.add(brace);
+  hinge.add(brace);
+  g.add(hinge);
+  g.userData.gateDoor = hinge;
   return g;
 }
 
@@ -144,6 +148,7 @@ export class Buildings {
     this.ghostType = null;
     this.ghostRot = 0;
     this.ghostValid = false;
+    this.ghostReplaceWall = null;
     this.ray = new THREE.Raycaster();
   }
 
@@ -171,26 +176,48 @@ export class Buildings {
     if (!this.ghost) return;
     this.ray.setFromCamera({ x: 0, y: 0 }, camera);
     this.ray.far = 9;
+    this.ghostReplaceWall = null;
+    if (this.ghostType === 'gate') {
+      const wallHit = this.ray.intersectObjects(
+        this.placed.filter((b) => b.type === 'wall').map((b) => b.group),
+        true
+      )[0];
+      if (wallHit) {
+        let node = wallHit.object;
+        while (node && !node.userData.building) node = node.parent;
+        this.ghostReplaceWall = node?.userData.building || null;
+      }
+    }
     const hits = this.ray.intersectObject(terrain);
-    if (!hits.length) {
+    if (!hits.length && !this.ghostReplaceWall) {
       this.ghost.visible = false;
       this.ghostValid = false;
       return;
     }
-    const p = hits[0].point.clone();
-    if (DEFS[this.ghostType].connectable) this.snapToWallEnd(p);
+    const p = this.ghostReplaceWall
+      ? new THREE.Vector3(this.ghostReplaceWall.x, 0, this.ghostReplaceWall.z)
+      : hits[0].point.clone();
+    if (this.ghostType === 'gate') {
+      if (this.ghostReplaceWall) {
+        this.ghostRot = this.ghostReplaceWall.rot;
+      } else {
+        this.snapToWallEnd(p);
+      }
+    } else if (DEFS[this.ghostType].connectable) this.snapToWallEnd(p);
     const h = terrainHeight(p.x, p.z);
     this.ghost.visible = true;
     this.ghost.position.set(p.x, h, p.z);
     this.ghost.rotation.y = this.ghostRot;
 
-    let valid = h > WATER_Y + 0.25 && terrainSlope(p.x, p.z) < 0.45;
+    let valid = !!this.ghostReplaceWall || (h > WATER_Y + 0.25 && terrainSlope(p.x, p.z) < 0.45);
     if (valid) {
       const def = DEFS[this.ghostType];
       for (const b of this.placed) {
+        if (b === this.ghostReplaceWall) continue;
         if (Math.hypot(b.x - p.x, b.z - p.z) < def.r + DEFS[b.type].r + 0.3) { valid = false; break; }
       }
     }
+    if (this.ghostType === 'gate' && !this.ghostReplaceWall) valid = false;
     this.ghostValid = valid;
     const mat = valid ? this.ghostMatOk : this.ghostMatBad;
     this.ghost.traverse((m) => { if (m.isMesh) m.material = mat; });
@@ -224,8 +251,77 @@ export class Buildings {
 
   tryPlace(type) {
     if (!this.ghost || !this.ghost.visible || !this.ghostValid || this.ghostType !== type) return false;
+    if (type === 'gate' && this.ghostReplaceWall) this.removeBuilding(this.ghostReplaceWall);
     this.place(type, this.ghost.position.x, this.ghost.position.z, this.ghostRot);
+    if (type === 'gate') this.clearPlayerPassage(this.placed[this.placed.length - 1]);
+    this.ghostReplaceWall = null;
     return true;
+  }
+
+  clearPlayerPassage(gate) {
+    const ax = Math.cos(gate.rot), az = -Math.sin(gate.rot);
+    const remaining = this.obstacles.filter((o) => {
+      if (o.building === gate) return false;
+      const dx = o.x - gate.x, dz = o.z - gate.z;
+      const along = Math.abs(dx * ax + dz * az);
+      const across = Math.abs(-dx * az + dz * ax);
+      return !(along < 1.25 && across < 0.75);
+    });
+    this.obstacles.splice(0, this.obstacles.length, ...remaining);
+  }
+
+  removeBuilding(building) {
+    this.group.remove(building.group);
+    this.placed = this.placed.filter((b) => b !== building);
+    const playerRemaining = this.obstacles.filter((o) => o.building !== building && !this.isInsideBuilding(o, building));
+    const animalRemaining = this.animalObstacles.filter((o) => o.building !== building && !this.isInsideBuilding(o, building));
+    this.obstacles.splice(0, this.obstacles.length, ...playerRemaining);
+    this.animalObstacles.splice(0, this.animalObstacles.length, ...animalRemaining);
+    this.fires = this.fires.filter((f) => f.building !== building);
+    for (const entry of this.lights.filter((l) => l.building === building)) this.scene.remove(entry.light);
+    this.lights = this.lights.filter((l) => l.building !== building);
+  }
+
+  isInsideBuilding(point, building) {
+    const def = DEFS[building.type];
+    const dx = point.x - building.x, dz = point.z - building.z;
+    if (!def?.connectable) return Math.hypot(dx, dz) < (def?.r || 1) + 0.2;
+    const ax = Math.cos(building.rot), az = -Math.sin(building.rot);
+    const along = Math.abs(dx * ax + dz * az);
+    const across = Math.abs(-dx * az + dz * ax);
+    return along < 1.2 && across < 0.75;
+  }
+
+  dismantle(building) {
+    if (!building || !this.placed.includes(building)) return null;
+    const refunds = {
+      wall: { holz: 2 }, gate: { holz: 2, stein: 1 },
+      torch: { holz: 1 }, campfire: { holz: 2, stein: 1 },
+      tent: { holz: 5, fell: 1 },
+    };
+    this.removeBuilding(building);
+    return refunds[building.type] || {};
+  }
+
+  toggleGate(building) {
+    if (!building || building.type !== 'gate') return false;
+    building.open = !building.open;
+    if (building.open) {
+      const remaining = this.animalObstacles.filter((o) => o.building !== building);
+      this.animalObstacles.splice(0, this.animalObstacles.length, ...remaining);
+    } else {
+      this.addAnimalBarrier(building);
+    }
+    return true;
+  }
+
+  addAnimalBarrier(building) {
+    const remaining = this.animalObstacles.filter((o) => o.building !== building);
+    this.animalObstacles.splice(0, this.animalObstacles.length, ...remaining);
+    const ax = Math.cos(building.rot), az = -Math.sin(building.rot);
+    for (const offset of [-0.78, 0, 0.78]) {
+      this.animalObstacles.push({ x: building.x + ax * offset, z: building.z + az * offset, r: 0.5, building });
+    }
   }
 
   place(type, x, z, rot) {
@@ -234,23 +330,26 @@ export class Buildings {
     g.position.set(x, terrainHeight(x, z), z);
     g.rotation.y = rot;
     this.group.add(g);
-    this.placed.push({ type, x, z, rot, group: g });
+    const building = { type, x, z, rot, group: g, open: false };
+    g.userData.building = building;
+    this.placed.push(building);
     if (def.connectable) {
       const ax = Math.cos(rot), az = -Math.sin(rot);
       for (const offset of [-0.78, 0, 0.78]) {
-        const obstacle = { x: x + ax * offset, z: z + az * offset, r: 0.38 };
+        const obstacle = { x: x + ax * offset, z: z + az * offset, r: 0.38, building };
         if (def.blocksPlayer) this.obstacles.push(obstacle);
         if (def.blocksAnimals) this.animalObstacles.push({ ...obstacle, r: 0.5 });
       }
     } else {
-      this.obstacles.push({ x, z, r: def.r });
+      if (def.blocksPlayer !== false) this.obstacles.push({ x, z, r: def.r, building });
     }
+    if (type === 'gate') this.clearPlayerPassage(building);
     if (def.fire) {
-      this.fires.push({ x, z });
+      this.fires.push({ x, z, building });
       const light = new THREE.PointLight(def.lightColor, def.lightI, def.lightD, 1.6);
       light.position.set(x, terrainHeight(x, z) + (type === 'torch' ? 1.4 : 1.0), z);
       this.scene.add(light);
-      this.lights.push({ light, base: def.lightI });
+      this.lights.push({ light, base: def.lightI, building });
     }
     if (def.spawn && this.onTentPlaced) this.onTentPlaced(x, z);
     return g;
@@ -269,6 +368,11 @@ export class Buildings {
   update(dt) {
     const t = performance.now() * 0.001;
     for (const b of this.placed) {
+      if (b.type === 'gate') {
+        const door = b.group.userData.gateDoor;
+        const target = b.open ? -Math.PI / 2 : 0;
+        door.rotation.y += (target - door.rotation.y) * Math.min(1, dt * 10);
+      }
       const flames = b.group.userData.flames;
       if (flames) {
         flames.children.forEach((f, i) => {
@@ -284,10 +388,14 @@ export class Buildings {
   }
 
   serialize() {
-    return this.placed.map((b) => ({ type: b.type, x: b.x, z: b.z, rot: b.rot }));
+    return this.placed.map((b) => ({ type: b.type, x: b.x, z: b.z, rot: b.rot, open: !!b.open }));
   }
 
   load(list) {
-    for (const b of list || []) this.place(b.type, b.x, b.z, b.rot);
+    for (const b of list || []) {
+      this.place(b.type, b.x, b.z, b.rot);
+      const placed = this.placed[this.placed.length - 1];
+      if (b.type === 'gate' && b.open) this.toggleGate(placed);
+    }
   }
 }
