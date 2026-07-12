@@ -76,6 +76,9 @@ html, body {
 .fill { height: 100%; border-radius: 999px; transition: width .25s; }
 .hp .fill { background: linear-gradient(90deg, #e53935, #ff7043); }
 .hunger .fill { background: linear-gradient(90deg, #fb8c00, #ffca28); }
+.thirst .fill { background: linear-gradient(90deg, #1976d2, #62d4ff); }
+.stamina .fill { background: linear-gradient(90deg, #2e9f62, #81e66f); }
+.warmth .fill { background: linear-gradient(90deg, #69b7ff, #ff8a4d); }
 .oxygen .fill { background: linear-gradient(90deg, #1e88e5, #64d8ff); }
 .track.warn { outline: 2px solid #ff5252; animation: pulse .8s infinite alternate; }
 @keyframes pulse { to { outline-color: transparent; } }
@@ -90,6 +93,15 @@ html, body {
   display: flex; gap: 8px; align-items: center;
   backdrop-filter: blur(4px);
 }
+#threatPanel {
+  position: absolute; top: 62px; left: 50%; transform: translateX(-50%);
+  color: #ffe1d8; background: rgba(92, 14, 14, .78); border: 1px solid rgba(255, 91, 72, .65);
+  padding: 6px 13px; border-radius: 999px; font-size: 11px; font-weight: 900;
+  letter-spacing: 1px; text-transform: uppercase; box-shadow: 0 0 22px rgba(255, 45, 25, .25);
+  animation: threatPulse 1.2s ease-in-out infinite alternate;
+}
+#threatPanel.blood { background: rgba(105, 0, 0, .9); color: #fff; }
+@keyframes threatPulse { to { box-shadow: 0 0 30px rgba(255, 45, 25, .55); } }
 
 /* Materialien */
 #matPanel {
@@ -165,6 +177,10 @@ html, body {
   transform: scale(1.12);
   background: rgba(40, 44, 30, .78);
 }
+/* Feste Werkzeug-Slots, die noch nicht freigeschaltet sind */
+.slot.empty { opacity: .4; cursor: default; }
+.slot.empty .itemIcon { filter: grayscale(1) brightness(.7); }
+.slot.empty .key { color: rgba(255,255,255,.3); }
 .itemIcon {
   display: grid; place-items: center;
   color: #fff;
@@ -179,6 +195,21 @@ html, body {
   font-size: 12px; color: #fff; font-weight: 800;
   text-shadow: 0 1px 2px rgba(0,0,0,.8);
 }
+.slot .ammo {
+  position: absolute; top: 1px; right: 4px;
+  display: inline-flex; align-items: center; gap: 1px;
+  font-size: 11px; color: #ffd166; font-weight: 800;
+  text-shadow: 0 1px 2px rgba(0,0,0,.85);
+}
+.slot .ammo .icon { width: 12px; height: 12px; }
+/* Haltbarkeitsbalken am unteren Rand eines Werkzeug-Slots */
+.slot .dura {
+  position: absolute; left: 6px; right: 6px; bottom: 3px; height: 3px;
+  background: rgba(0,0,0,.55); border-radius: 2px; overflow: hidden;
+}
+.slot .dura i { display: block; height: 100%; background: #7ddc6b; transition: width .15s; }
+.slot .dura.mid i { background: #ffd166; }
+.slot .dura.low i { background: #ff6b5a; }
 
 #selName {
   position: absolute; bottom: 84px; left: 50%;

@@ -1,13 +1,15 @@
 import * as THREE from 'three';
-import { World, terrainHeight } from './world.js';
+import { World, terrainHeight, terrainSlope, WATER_Y, WORLD_RADIUS } from './world.js';
 import { Resources } from './resources.js';
 import { Buildings } from './buildings.js';
 import { Animals } from './animals.js';
 import { Effects } from './effects.js';
 import { Player } from './player.js';
 import { UI } from './ui.js';
-import { ITEMS, HOTBAR_ORDER } from './items.js';
+import { ITEMS, buildHotbar, slotUsable } from './items.js';
+import { CAMPFIRE_WOOD_FUEL } from './buildings.js';
 import { sfx } from './sfx.js';
+import { Music } from './music.js';
 import { TouchControls } from './touch.js';
 import { Aquatics } from './aquatics.js';
 import { Landmarks, LANDMARK_COUNT } from './landmarks.js';
@@ -64,6 +66,7 @@ player.platforms = landmarks.platforms;
 const game = {
   state: 'menu', // menu | playing | sleeping | paused | craft | dead
   inv: {},
+  dura: {}, // aktuelle Haltbarkeit pro Werkzeug-Id
   hotbar: ['hand'],
   hotIdx: 0,
   spawn: { x: 0, z: 6 },
@@ -74,6 +77,11 @@ const game = {
   fireWarningShown: false,
   tutorialStage: 0,
   discoveries: [],
+  raidTimer: 18,
+  nightAnnouncedDay: 0,
+  thirstWarning: false,
+  coldWarning: false,
+  boat: null,
 };
 
 buildings.onTentPlaced = (x, z) => {
@@ -81,10 +89,25 @@ buildings.onTentPlaced = (x, z) => {
   ui.toast('Spawnpunkt gesetzt!');
 };
 
+buildings.onFireOut = () => {
+  if (game.state === 'playing') ui.toast('Ein Lagerfeuer ist erloschen — mit Holz (E) neu anfeuern.', 'hint');
+};
+
+// Donner-Sound, wenn im Sturm ein Blitz einschlägt
+world.onThunder = (dist) => sfx.thunder(dist);
+
+// Intro-/Titelmusik
+const music = new Music();
+let ambientStarted = false;
+function startAudioForPlay() {
+  music.stop();
+  if (!ambientStarted) { sfx.startAmbient(); ambientStarted = true; }
+}
+
 player.onDamage = (n, cause) => {
   ui.damageFlash();
   sfx.hurt();
-  if (player.hp <= 0 && game.state === 'playing') die(cause || 'Ein Wolf hat dich erwischt.');
+  if (player.hp <= 0 && game.state === 'playing') die(cause || 'Ein wildes Tier hat dich erwischt.');
 };
 
 // ---------- Inventar ----------
@@ -121,7 +144,8 @@ function discoverLandmark(landmark) {
   if (game.discoveries.length === LANDMARK_COUNT) {
     addItem('holzwand', 4, true);
     addItem('wildtor', 1, true);
-    addItem('fackel', 2, true);
+    if ((game.inv.fackel || 0) === 0) { addItem('fackel', 1, true); game.dura.fackel = ITEMS.fackel.dura; }
+    addItem('holz', 6, true);
     setTimeout(() => ui.toast('Chronik vollständig: Festungs-Paket erhalten!'), 3200);
   }
   refreshInv();
@@ -134,19 +158,37 @@ function removeItem(id, n = 1) {
   refreshInv();
 }
 
+// Verschleiß eines Werkzeugs. Gibt false zurück, wenn es dabei zerbricht.
+function useDurability(toolId) {
+  const def = ITEMS[toolId];
+  if (!def?.dura || def.burns) return true; // kein Pro-Nutzung-Verschleiß (Hand, Fackel brennt zeitbasiert)
+  game.dura[toolId] = (game.dura[toolId] ?? def.dura) - 1;
+  if (game.dura[toolId] <= 0) {
+    delete game.dura[toolId];
+    removeItem(toolId, 1); // zerbricht -> aus dem Inventar, kann neu gecraftet werden
+    ui.toast(`${def.name} ist zerbrochen!`, 'hint');
+    sfx.hurt();
+    return false;
+  }
+  refreshInv(); // Haltbarkeitsbalken aktualisieren
+  return true;
+}
+
 function refreshInv() {
   const selId = game.hotbar[game.hotIdx];
-  game.hotbar = HOTBAR_ORDER.filter((id) => id === 'hand' || (game.inv[id] || 0) > 0);
+  game.hotbar = buildHotbar(game.inv);
   const newIdx = game.hotbar.indexOf(selId);
-  game.hotIdx = newIdx >= 0 ? newIdx : 0;
-  ui.renderHotbar(game.hotbar, game.hotIdx, game.inv);
+  // Auswahl beibehalten, sofern der Slot noch benutzbar ist – sonst zurück auf die Hand.
+  game.hotIdx = newIdx >= 0 && slotUsable(selId, game.inv) ? newIdx : 0;
+  ui.renderHotbar(game.hotbar, game.hotIdx, game.inv, game.dura);
   ui.setMaterials(game.inv);
   if (game.state === 'craft') ui.renderCraft(game.inv);
   syncSelection();
 }
 
 function selected() {
-  return game.hotbar[game.hotIdx] || 'hand';
+  const id = game.hotbar[game.hotIdx];
+  return id && slotUsable(id, game.inv) ? id : 'hand';
 }
 
 function syncSelection() {
@@ -162,8 +204,9 @@ function syncSelection() {
 
 function selectSlot(i) {
   if (i < 0 || i >= game.hotbar.length) return;
+  if (!slotUsable(game.hotbar[i], game.inv)) return; // leerer Werkzeug-Slot: ignorieren
   game.hotIdx = i;
-  ui.renderHotbar(game.hotbar, game.hotIdx, game.inv);
+  ui.renderHotbar(game.hotbar, game.hotIdx, game.inv, game.dura);
   ui.showSelName(ITEMS[selected()].name);
   syncSelection();
 }
@@ -172,8 +215,73 @@ ui.onSelectSlot = selectSlot;
 
 // ---------- Aktionen ----------
 const ray = new THREE.Raycaster();
-const flyingSpears = [];
+const flyingArrows = [];
 const spearDirection = new THREE.Vector3();
+
+// Fackel-Licht: folgt dem Spieler, solange die Fackel in der Hand ist
+const torchLight = new THREE.PointLight(0xffb050, 0, 12, 1.6);
+torchLight.visible = false;
+scene.add(torchLight);
+
+// true, solange eine brennende Fackel getragen wird (für Licht & Wolfsabwehr)
+function torchHeld() {
+  return selected() === 'fackel' && (game.inv.fackel || 0) > 0;
+}
+
+// Atmosphäre: Regenpegel setzen, gelegentlich Vögel zwitschern lassen
+let birdTimer = 5;
+function updateAmbient(dt) {
+  const rain = world.rainIntensity;
+  sfx.setRain(rain * 0.09);
+
+  birdTimer -= dt;
+  if (birdTimer <= 0) {
+    birdTimer = 3.5 + Math.random() * 7;
+    // Vögel singen tagsüber bei trockenem Wetter
+    if (world.elevation > 0.12 && rain < 0.25) sfx.birdChirp();
+  }
+}
+
+let stepTimer = 0;
+function updateFootsteps(dt, movement) {
+  if (!movement.moving) {
+    stepTimer = Math.min(stepTimer, 0.08);
+    return;
+  }
+  stepTimer -= dt;
+  if (stepTimer > 0) return;
+  if (movement.swimming) {
+    sfx.swimStroke(movement.underwater);
+    stepTimer = movement.underwater ? 0.72 : 0.58;
+    return;
+  }
+  if (!player.grounded) return;
+  let surface = 'grass';
+  const h = terrainHeight(player.pos.x, player.pos.z);
+  if (movement.wading) surface = 'water';
+  else if (h < 0.55) surface = 'sand';
+  else if (h > 8 || terrainSlope(player.pos.x, player.pos.z) > 0.72) surface = 'stone';
+  sfx.footstep(surface);
+  // Sprinten klingt schneller; Waten bleibt bewusst etwas schwerfälliger.
+  stepTimer = movement.wading ? 0.5 : player.sprinting ? 0.29 : 0.42;
+}
+
+function updateTorch(dt) {
+  if (!torchHeld()) return;
+  // Fackel brennt zeitbasiert herunter
+  game.dura.fackel = (game.dura.fackel ?? ITEMS.fackel.dura) - dt;
+  if (game.dura.fackel <= 0) {
+    delete game.dura.fackel;
+    removeItem('fackel', 1);
+    ui.toast('Deine Fackel ist heruntergebrannt!', 'hint');
+    sfx.hurt();
+    return;
+  }
+  torchLight.visible = true;
+  torchLight.position.set(camera.position.x, camera.position.y + 0.1, camera.position.z);
+  torchLight.intensity = 2.0 * (0.85 + Math.sin(performance.now() * 0.012) * 0.12 + Math.random() * 0.06);
+  ui.updateDuraBar('fackel', game.dura.fackel / ITEMS.fackel.dura);
+}
 
 function raycastTargets(range) {
   ray.setFromCamera({ x: 0, y: 0 }, camera);
@@ -200,11 +308,19 @@ function raycastBuilding(range = 4.5) {
   return obj?.userData.building || null;
 }
 
+// Interaktionen gelten nur für das Gebäude im Fadenkreuz und in sinnvoller Nähe.
+// Dadurch kann E nichts mehr hinter oder seitlich vom Spieler auslösen.
+function aimedBuildingOfType(type, maxDist, aimed = raycastBuilding()) {
+  if (!aimed || aimed.type !== type) return null;
+  return Math.hypot(aimed.x - player.pos.x, aimed.z - player.pos.z) <= maxDist ? aimed : null;
+}
+
 function primaryAction() {
   const id = selected();
   const def = ITEMS[id];
   if (def.type === 'food') return eatItem(id);
   if (def.type === 'placeable') return placeSelected(id);
+  if (id === 'bogen') return shootBow();
   attack(id);
 }
 
@@ -213,12 +329,14 @@ function eatItem(id) {
   const def = ITEMS[id];
   removeItem(id, 1);
   player.hunger = Math.min(100, player.hunger + def.hunger);
+  if (def.thirst) player.thirst = THREE.MathUtils.clamp(player.thirst + def.thirst, 0, 100);
   if (def.hp > 0) player.hp = Math.min(100, player.hp + def.hp);
   if (def.hp < 0) {
     player.damage(-def.hp);
     ui.toast(`${def.name} roh gegessen… (-${-def.hp} Gesundheit)`);
   } else {
-    ui.toast(`${def.name} gegessen (+${def.hunger} Hunger)`);
+    const hydration = def.thirst > 0 ? ` · +${def.thirst} Wasser` : def.thirst < 0 ? ` · ${def.thirst} Wasser` : '';
+    ui.toast(`${def.name} gegessen (+${def.hunger} Hunger${hydration})`);
   }
   sfx.eat();
 }
@@ -243,11 +361,8 @@ function attack(toolId) {
     for (const [id, n] of Object.entries(refunds || {})) addItem(id, n, true);
     ui.toast('Gebäude abgebaut — Materialien teilweise gerettet.');
     sfx.place();
+    useDurability('hammer');
     saveGame();
-    return;
-  }
-  if (toolId === 'speer') {
-    throwSpear();
     return;
   }
   const range = 3.4;
@@ -265,6 +380,7 @@ function attack(toolId) {
     if (result.drops) {
       for (const [id, n] of Object.entries(result.drops)) addItem(id, n);
     }
+    useDurability(toolId);
   } else if (hit.obj.userData.animal) {
     const animal = hit.obj.userData.animal;
     const dmg = toolIdDamage(toolId);
@@ -275,32 +391,51 @@ function attack(toolId) {
       ui.toast(`${result.name} erlegt!`);
       for (const [id, n] of Object.entries(result.drops)) addItem(id, n);
     }
+    useDurability(toolId);
   }
 }
 
-function throwSpear() {
+// Bogen abfeuern: verbraucht einen Pfeil und etwas Haltbarkeit
+function shootBow() {
+  if (!player.swing()) return;
+  if ((game.inv.pfeil || 0) <= 0) {
+    ui.toast('Keine Pfeile — crafte welche (Holz + Stein)!', 'hint');
+    return;
+  }
+  removeItem('pfeil', 1);
+  sfx.attack();
+  shootArrow();
+  useDurability('bogen');
+}
+
+function shootArrow() {
   camera.getWorldDirection(spearDirection);
   const dir = spearDirection.clone().normalize();
   const g = new THREE.Group();
   const shaft = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.025, 0.03, 1.35, 6),
-    new THREE.MeshStandardMaterial({ color: 0x80542f, roughness: 1 })
+    new THREE.CylinderGeometry(0.013, 0.015, 0.9, 5),
+    new THREE.MeshStandardMaterial({ color: 0x9a7b4f, roughness: 1 })
   );
   const tip = new THREE.Mesh(
-    new THREE.ConeGeometry(0.065, 0.24, 6),
-    new THREE.MeshStandardMaterial({ color: 0xb8bec6, roughness: 0.7 })
+    new THREE.ConeGeometry(0.035, 0.12, 5),
+    new THREE.MeshStandardMaterial({ color: 0xb8bec6, roughness: 0.6 })
   );
-  tip.position.y = 0.78;
-  g.add(shaft, tip);
+  tip.position.y = 0.5;
+  const fletch = new THREE.Mesh(
+    new THREE.BoxGeometry(0.002, 0.1, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0xd0524a, roughness: 1 })
+  );
+  fletch.position.y = -0.4;
+  g.add(shaft, tip, fletch);
   g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-  g.position.copy(camera.position).addScaledVector(dir, 0.8).add(new THREE.Vector3(0, -0.12, 0));
+  g.position.copy(camera.position).addScaledVector(dir, 0.8).add(new THREE.Vector3(0, -0.1, 0));
   scene.add(g);
-  flyingSpears.push({ group: g, dir, distance: 0, speed: 24 });
+  flyingArrows.push({ group: g, dir, distance: 0, speed: 36 });
 }
 
-function updateFlyingSpears(dt) {
-  for (let i = flyingSpears.length - 1; i >= 0; i--) {
-    const spear = flyingSpears[i];
+function updateFlyingArrows(dt) {
+  for (let i = flyingArrows.length - 1; i >= 0; i--) {
+    const spear = flyingArrows[i];
     const step = spear.speed * dt;
     ray.set(spear.group.position, spear.dir);
     ray.far = step + 0.35;
@@ -316,42 +451,46 @@ function updateFlyingSpears(dt) {
     if (fish && aquatics.hit(fish)) {
       sfx.hit();
       addItem('fleisch_roh', 1);
-      ui.toast('Fisch mit dem Speer gefangen!');
+      ui.toast('Fisch mit dem Bogen erlegt!');
       scene.remove(spear.group);
-      flyingSpears.splice(i, 1);
+      flyingArrows.splice(i, 1);
       continue;
     }
 
     if (animal && animals.list.includes(animal)) {
       sfx.hit();
-      const result = animals.hit(animal, toolIdDamage('speer'), spear.dir);
+      const result = animals.hit(animal, toolIdDamage('bogen'), spear.dir);
       if (result.killed) {
         ui.toast(`${result.name} erlegt!`);
         for (const [id, n] of Object.entries(result.drops)) addItem(id, n);
       }
       scene.remove(spear.group);
-      flyingSpears.splice(i, 1);
+      flyingArrows.splice(i, 1);
       continue;
     }
 
     spear.group.position.addScaledVector(spear.dir, step);
     spear.distance += step;
     const ground = terrainHeight(spear.group.position.x, spear.group.position.z);
-    if (spear.distance >= 30 || spear.group.position.y <= ground + 0.08) {
+    if (spear.distance >= 40 || spear.group.position.y <= ground + 0.08) {
       scene.remove(spear.group);
-      flyingSpears.splice(i, 1);
+      flyingArrows.splice(i, 1);
     }
   }
 }
 
 function toolIdDamage(toolId) {
-  if (toolId === 'speer') return 5;
+  if (toolId === 'bogen') return 5;
   if (toolId === 'axt' || toolId === 'spitzhacke') return 2;
   return 1;
 }
 
 // E — Interagieren (Kochen / Schlafen)
 function interact() {
+  if (game.boat) {
+    exitRaft();
+    return;
+  }
   const aimedBuilding = raycastBuilding();
   if (aimedBuilding?.type === 'gate') {
     buildings.toggleGate(aimedBuilding);
@@ -360,16 +499,57 @@ function interact() {
     saveGame();
     return;
   }
-  const fire = buildings.nearest('campfire', player.pos, 3.5);
-  if (fire && (game.inv.fleisch_roh || 0) > 0) {
-    removeItem('fleisch_roh', 1);
-    addItem('fleisch', 1, true);
-    ui.toast('Fleisch gebraten!');
-    sfx.cook();
-    refreshInv();
+  const raft = aimedBuildingOfType('raft', 3.8, aimedBuilding);
+  if (raft) {
+    enterRaft(raft);
     return;
   }
-  const tent = buildings.nearest('tent', player.pos, 3.2);
+  const fire = aimedBuildingOfType('campfire', 3.5, aimedBuilding);
+  if (fire) {
+    // Erloschenes Feuer: mit Holz wieder anzünden
+    if (!fire.lit) {
+      if ((game.inv.holz || 0) > 0) {
+        removeItem('holz', 1);
+        buildings.refuel(fire, CAMPFIRE_WOOD_FUEL);
+        ui.toast('Feuer wieder angefacht!');
+        sfx.cook();
+        saveGame();
+      } else {
+        ui.toast('Du brauchst Holz zum Anfeuern.', 'hint');
+      }
+      return;
+    }
+    // Brennendes Feuer: erst braten …
+    if ((game.inv.fleisch_roh || 0) > 0) {
+      removeItem('fleisch_roh', 1);
+      addItem('fleisch', 1, true);
+      ui.toast('Fleisch gebraten!');
+      sfx.cook();
+      refreshInv();
+      return;
+    }
+    // … sonst mit Holz nachlegen
+    if ((game.inv.holz || 0) > 0 && fire.fuel < fire.maxFuel) {
+      removeItem('holz', 1);
+      buildings.refuel(fire, CAMPFIRE_WOOD_FUEL);
+      ui.toast('Holz nachgelegt.');
+      sfx.cook();
+      saveGame();
+      return;
+    }
+  }
+  const catcher = aimedBuildingOfType('raincatcher', 3.5, aimedBuilding);
+  if (catcher) {
+    const water = buildings.drinkFrom(catcher, 30);
+    if (water > 0) {
+      player.thirst = Math.min(100, player.thirst + water * 1.5);
+      ui.toast('Frisches Regenwasser getrunken.');
+      sfx.eat();
+      saveGame();
+    } else ui.toast('Der Regenfänger ist noch leer.', 'hint');
+    return;
+  }
+  const tent = aimedBuildingOfType('tent', 3.2, aimedBuilding);
   if (tent && world.night) {
     game.state = 'sleeping';
     stopDesktopAction();
@@ -378,12 +558,59 @@ function interact() {
       world.sleep();
       player.hp = Math.min(100, player.hp + 25);
       player.hunger = Math.max(0, player.hunger - 8);
+      player.thirst = Math.max(0, player.thirst - 10);
       saveGame();
     }, () => {
       game.state = 'playing';
       ui.toast('Gut geschlafen — ein neuer Morgen!');
     });
   }
+}
+
+function enterRaft(raft) {
+  game.boat = raft;
+  raft.speed ||= 0;
+  raft.turnSpeed ||= 0;
+  player.vel.set(0, 0, 0);
+  player.vy = 0;
+  ui.toast('Floß bestiegen · W/S fahren · A/D lenken · E aussteigen');
+}
+
+function exitRaft() {
+  const raft = game.boat;
+  if (!raft) return;
+  const sideX = Math.cos(raft.rot) * 1.8;
+  const sideZ = -Math.sin(raft.rot) * 1.8;
+  player.pos.set(raft.x + sideX, WATER_Y - 0.15, raft.z + sideZ);
+  player.vel.set(0, 0, 0);
+  game.boat = null;
+  ui.toast('Floß verlassen.');
+}
+
+function updateRaft(dt) {
+  const raft = game.boat;
+  if (!raft || !buildings.placed.includes(raft)) { game.boat = null; return player.update(dt); }
+  const k = player.keys;
+  const touchInput = player.touchInput;
+  const throttle = touchInput?.enabled ? touchInput.vec.y : (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0);
+  const steer = touchInput?.enabled ? touchInput.vec.x : (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
+  const targetSpeed = throttle * (throttle > 0 ? 5.4 : 2.4);
+  raft.speed += (targetSpeed - raft.speed) * Math.min(1, dt * (throttle ? 1.8 : 0.75));
+  const steerGrip = THREE.MathUtils.clamp(Math.abs(raft.speed) / 2.2, 0.18, 1);
+  raft.turnSpeed += (steer * 0.85 * steerGrip - raft.turnSpeed) * Math.min(1, dt * 2.4);
+  raft.rot += raft.turnSpeed * dt * (raft.speed < 0 ? -1 : 1);
+  const fx = Math.sin(raft.rot), fz = Math.cos(raft.rot);
+  const nx = THREE.MathUtils.clamp(raft.x + (fx * raft.speed + world.wind.x * 0.18) * dt, -WORLD_RADIUS + 5, WORLD_RADIUS - 5);
+  const nz = THREE.MathUtils.clamp(raft.z + (fz * raft.speed + world.wind.z * 0.18) * dt, -WORLD_RADIUS + 5, WORLD_RADIUS - 5);
+  if (terrainHeight(nx, nz) < WATER_Y - 0.18) { raft.x = nx; raft.z = nz; }
+  else raft.speed *= Math.max(0, 1 - dt * 5);
+  raft.group.position.set(raft.x, WATER_Y + 0.05 + Math.sin(performance.now() * 0.0018) * 0.045, raft.z);
+  raft.group.rotation.set(Math.sin(performance.now() * 0.0013) * 0.012, raft.rot, Math.sin(performance.now() * 0.0017 + 1) * 0.018);
+  player.pos.set(raft.x, WATER_Y + 0.34, raft.z);
+  player.grounded = true; player.swimming = false; player.underwater = false; player.sprinting = false;
+  camera.position.set(raft.x, WATER_Y + 2.05, raft.z);
+  camera.rotation.set(player.pitch, player.yaw, 0);
+  return { wading: false, swimming: false, underwater: false, moving: false };
 }
 
 // ---------- Crafting ----------
@@ -394,9 +621,12 @@ ui.onCraft = (recipe) => {
   const def = ITEMS[recipe.out];
   if (def.once && (game.inv[recipe.out] || 0) > 0) return;
   for (const [id, n] of Object.entries(recipe.cost)) removeItem(id, n);
-  addItem(recipe.out, 1, true);
-  ui.toast(`${def.name} hergestellt!`);
+  const amount = recipe.yield || 1;
+  addItem(recipe.out, amount, true);
+  if (def.dura) game.dura[recipe.out] = def.dura; // neues Werkzeug: volle Haltbarkeit
+  ui.toast(amount > 1 ? `${amount}× ${def.name} hergestellt!` : `${def.name} hergestellt!`);
   sfx.craft();
+  refreshInv();
   ui.renderCraft(game.inv);
 };
 
@@ -475,9 +705,14 @@ function die(cause) {
 }
 
 function respawn() {
+  game.boat = null;
   player.hp = 100;
   player.hunger = 60;
   player.oxygen = 100;
+  player.thirst = 65;
+  player.warmth = 100;
+  player.stamina = 100;
+  player.exhausted = false;
   player.pos.set(game.spawn.x, terrainHeight(game.spawn.x, game.spawn.z), game.spawn.z);
   player.vel.set(0, 0, 0);
   game.fireDamageTimer = 0;
@@ -502,14 +737,55 @@ function updateFireDamage(dt) {
   }
 }
 
+function updateSurvival(dt) {
+  const movingDrain = player.sprinting ? 0.13 : 0;
+  player.thirst = Math.max(0, player.thirst - (0.42 + movingDrain) * dt);
+
+  const altitude = terrainHeight(player.pos.x, player.pos.z);
+  const nearWarmFire = !!buildings.nearest('campfire', player.pos, 6)?.lit;
+  const hasCoat = (game.inv.pelzmantel || 0) > 0;
+  let cold = Math.max(0, (altitude - 6) / 8);
+  if (world.night) cold += 0.28;
+  if (world.rainIntensity > 0.2) cold += world.rainIntensity * 0.45;
+  if (player.swimming) cold += 0.75;
+  if (hasCoat) cold *= 0.35;
+  if (nearWarmFire) cold = -1.2;
+  const warmthTarget = THREE.MathUtils.clamp(100 - cold * 85, 0, 100);
+  const rate = warmthTarget < player.warmth ? 0.065 : 0.18;
+  player.warmth += (warmthTarget - player.warmth) * Math.min(1, dt * rate);
+
+  if (player.thirst < 22 && !game.thirstWarning) {
+    game.thirstWarning = true;
+    ui.toast('Du hast starken Durst — sammle Regenwasser!', 'hint');
+  } else if (player.thirst > 45) game.thirstWarning = false;
+  if (player.warmth < 24 && !game.coldWarning) {
+    game.coldWarning = true;
+    ui.toast(hasCoat ? 'Dir wird kalt — suche ein Feuer.' : 'Dir wird kalt — Feuer oder Pelzmantel helfen.', 'hint');
+  } else if (player.warmth > 55) game.coldWarning = false;
+
+  if (player.thirst <= 0) {
+    player.hp = Math.max(0, player.hp - 4 * dt);
+    return 'thirst';
+  }
+  if (player.warmth <= 5) {
+    player.hp = Math.max(0, player.hp - 3 * dt);
+    return 'cold';
+  }
+  return null;
+}
+
 // ---------- Speichern / Laden ----------
 function saveGame() {
   if (game.state === 'menu') return;
   const data = {
     inv: game.inv,
+    dura: game.dura,
     hp: player.hp,
     hunger: player.hunger,
     oxygen: player.oxygen,
+    thirst: player.thirst,
+    warmth: player.warmth,
+    stamina: player.stamina,
     day: world.day,
     t: world.t,
     pos: { x: player.pos.x, z: player.pos.z },
@@ -526,9 +802,24 @@ function loadGame() {
     const data = JSON.parse(localStorage.getItem(SAVE_KEY));
     if (!data) return false;
     game.inv = data.inv || {};
+    game.dura = data.dura || {};
+    // Alte Spielstände: Speer -> Bogen + ein paar Pfeile
+    if (game.inv.speer) {
+      delete game.inv.speer;
+      game.inv.bogen = 1;
+      game.dura.bogen = ITEMS.bogen.dura;
+      game.inv.pfeil = (game.inv.pfeil || 0) + 6;
+    }
+    // Fackel war früher platzierbar (Stapel) -> jetzt Werkzeug mit Haltbarkeit
+    if ((game.inv.fackel || 0) > 1) game.inv.fackel = 1;
+    if (game.inv.fackel && game.dura.fackel == null) game.dura.fackel = ITEMS.fackel.dura;
     player.hp = data.hp ?? 100;
     player.hunger = data.hunger ?? 100;
     player.oxygen = data.oxygen ?? 100;
+    player.thirst = data.thirst ?? 100;
+    player.warmth = data.warmth ?? 100;
+    player.stamina = data.stamina ?? 100;
+    player.exhausted = false;
     world.day = data.day ?? 1;
     world.t = data.t ?? 0.3;
     game.spawn = data.spawn || { x: 0, z: 6 };
@@ -548,6 +839,7 @@ function loadGame() {
 function newGame() {
   localStorage.removeItem(SAVE_KEY);
   game.inv = { beeren: 2 };
+  game.dura = {};
   game.spawn = { x: 0, z: 6 };
   game.tutorialStage = 0;
   game.discoveries = [];
@@ -556,6 +848,10 @@ function newGame() {
   player.hp = 100;
   player.hunger = 100;
   player.oxygen = 100;
+  player.thirst = 100;
+  player.warmth = 100;
+  player.stamina = 100;
+  player.exhausted = false;
   player.pos.set(0, terrainHeight(0, 6), 6);
   refreshInv();
   updateTutorial(true);
@@ -570,14 +866,18 @@ addEventListener('pagehide', saveGame);
 // ---------- Input ----------
 addEventListener('keydown', (e) => {
   if (e.code === 'Tab') e.preventDefault();
+  if (e.code === 'KeyM' && !e.repeat) {
+    const m = !sfx.muted;
+    sfx.setMuted(m);
+    music.setMuted(m);
+    ui.toast(m ? 'Ton aus' : 'Ton an');
+    return;
+  }
   if (game.state === 'playing') {
     if (e.code === 'KeyC' || e.code === 'Tab') openCraft();
     else if (e.code === 'KeyE') interact();
     else if (e.code === 'KeyR') buildings.rotateGhost();
-    else if (e.code === 'KeyM') {
-      sfx.muted = !sfx.muted;
-      ui.toast(sfx.muted ? 'Ton aus' : 'Ton an');
-    } else if (/^Digit[1-9]$/.test(e.code)) selectSlot(+e.code.slice(5) - 1);
+    else if (/^Digit[1-9]$/.test(e.code)) selectSlot(+e.code.slice(5) - 1);
     else if (e.code === 'Escape' && !document.pointerLockElement) {
       game.state = 'paused';
       ui.showOverlay('pause');
@@ -613,7 +913,12 @@ addEventListener('blur', stopDesktopAction);
 addEventListener('wheel', (e) => {
   if (game.state !== 'playing' || game.hotbar.length < 2) return;
   const d = e.deltaY > 0 ? 1 : -1;
-  selectSlot((game.hotIdx + d + game.hotbar.length) % game.hotbar.length);
+  // Zum nächsten benutzbaren Slot springen (leere Werkzeug-Slots überspringen)
+  let i = game.hotIdx;
+  for (let step = 0; step < game.hotbar.length; step++) {
+    i = (i + d + game.hotbar.length) % game.hotbar.length;
+    if (slotUsable(game.hotbar[i], game.inv)) { selectSlot(i); break; }
+  }
 });
 
 addEventListener('contextmenu', (e) => e.preventDefault());
@@ -631,14 +936,27 @@ addEventListener('resize', () => {
 });
 
 // Menü-Buttons
+// Rendert ein korrektes Ego-Frame mit der geladenen Tageszeit, BEVOR das Menü
+// ausgeblendet wird. Sonst bleibt beim Ausblenden kurz das letzte Menü-Frame
+// stehen – und weil die Menü-Zeit weiterläuft, kann das ein dunkles/schwarzes
+// Nachtbild sein, das kurz aufblitzt.
+function prerenderFirstFrame() {
+  world.update(0, player.pos);
+  player.update(0);
+  buildings.updateGhost(camera, world.terrain);
+  renderer.render(scene, camera);
+}
+
 function startGame() {
   sfx.unlock();
+  startAudioForPlay();
   if (game.state === 'menu') {
     if (!loadGame()) newGame();
   } else if (game.state === 'dead') {
     if (Date.now() < game.respawnAt) return;
     respawn();
   }
+  prerenderFirstFrame();
   resumePlaying();
   if (!touch?.enabled) lockPointer();
 }
@@ -649,9 +967,12 @@ document.getElementById('craftClose').addEventListener('click', closeCraft);
 
 document.getElementById('btnNew').addEventListener('click', () => {
   sfx.unlock();
+  startAudioForPlay();
   newGame();
   respawn();
   player.hunger = 100;
+  player.thirst = 100;
+  prerenderFirstFrame();
   resumePlaying();
   if (!touch?.enabled) lockPointer();
 });
@@ -659,11 +980,12 @@ document.getElementById('btnNew').addEventListener('click', () => {
 // ---------- HUD-Update ----------
 function updateHUD() {
   const starving = player.hunger <= 0;
-  ui.setBars(player.hp, player.hunger, starving, player.oxygen, player.swimming || player.oxygen < 100);
+  ui.setBars(player.hp, player.hunger, starving, player.oxygen, player.swimming || player.oxygen < 100, player.stamina, player.thirst, player.warmth);
   ui.setClock(world.day, world.elevation);
+  ui.setThreat(world.night, Math.min(10, world.day), world.day % 3 === 0);
 
   // Ziel unterm Fadenkreuz
-  const t = raycastTargets(selected() === 'speer' ? 30 : 4.6);
+  const t = raycastTargets(selected() === 'bogen' ? 40 : 4.6);
   if (t) {
     if (t.obj.userData.res) {
       const names = { tree: 'Baum', rock: 'Stein', bush: 'Beerenstrauch' };
@@ -672,7 +994,7 @@ function updateHUD() {
       const a = t.obj.userData.animal;
       ui.target(`${a.def.name} · ${a.hp}/${a.def.hp} Gesundheit`);
     } else if (t.obj.userData.fish) {
-      ui.target('Fisch · mit dem Speer jagen');
+      ui.target('Fisch · mit dem Bogen jagen');
     }
   } else {
     ui.target(null);
@@ -680,19 +1002,35 @@ function updateHUD() {
 
   // Kontext-Prompt
   let prompt = null;
-  const fire = buildings.nearest('campfire', player.pos, 3.5);
-  const tent = buildings.nearest('tent', player.pos, 3.2);
   const aimedBuilding = raycastBuilding();
+  const fire = aimedBuildingOfType('campfire', 3.5, aimedBuilding);
+  const tent = aimedBuildingOfType('tent', 3.2, aimedBuilding);
+  const catcher = aimedBuildingOfType('raincatcher', 3.5, aimedBuilding);
+  const raft = aimedBuildingOfType('raft', 3.8, aimedBuilding);
   const aimedGate = aimedBuilding?.type === 'gate' ? aimedBuilding : null;
-  if (player.swimming) prompt = player.underwater ? 'Q — tiefer tauchen · Leertaste — auftauchen' : 'Q — abtauchen · Leertaste — auftauchen';
+  const fireOut = fire && !fire.lit;
+  const canRefuel = fire && fire.lit && fire.fuel < fire.maxFuel && (game.inv.holz || 0) > 0;
+  if (game.boat) prompt = 'W/S — fahren · A/D — lenken · E — aussteigen';
+  else if (player.swimming) prompt = player.underwater ? 'Q — tiefer tauchen · Leertaste — auftauchen' : 'Q — abtauchen · Leertaste — auftauchen';
   else if (aimedGate) prompt = `E — Tor ${aimedGate.open ? 'schließen' : 'öffnen'}`;
   else if (selected() === 'hammer' && aimedBuilding) prompt = 'Linksklick — Gebäude abbauen';
+  else if (fireOut) prompt = (game.inv.holz || 0) > 0 ? 'E — Feuer mit Holz anfeuern' : 'Feuer erloschen — Holz zum Anfeuern nötig';
   else if (fire && (game.inv.fleisch_roh || 0) > 0) prompt = 'E — Fleisch braten';
+  else if (canRefuel) prompt = 'E — Holz nachlegen';
+  else if (catcher) prompt = catcher.water > 1 ? `E — Regenwasser trinken · ${Math.round(catcher.water)}%` : 'Regenfänger leer — warte auf Regen';
+  else if (raft) prompt = 'E — Floß besteigen';
   else if (tent && world.night) prompt = 'E — Schlafen bis zum Morgen';
   else if (ITEMS[selected()].type === 'placeable') prompt = 'Linksklick — Platzieren · R — Drehen';
   else if (starving) prompt = 'Du verhungerst! Iss etwas!';
   ui.prompt(prompt);
-  touch?.setInteract(aimedGate ? 'gate' : (fire && (game.inv.fleisch_roh || 0) > 0) ? 'food' : (tent && world.night) ? 'tent' : null);
+  const interactHint = aimedGate ? 'gate'
+    : fireOut ? 'food'
+    : (fire && fire.lit && (game.inv.fleisch_roh || 0) > 0) ? 'food'
+    : canRefuel ? 'food'
+    : catcher ? 'food'
+    : raft ? 'gate'
+    : (tent && world.night) ? 'tent' : null;
+  touch?.setInteract(interactHint);
 }
 
 // ---------- Game-Loop ----------
@@ -706,6 +1044,7 @@ function tick(dt) {
   const now = performance.now();
 
   player.held.visible = game.state !== 'menu';
+  torchLight.visible = false; // wird nur im Spielzustand wieder eingeschaltet
 
   if (game.state === 'menu') {
     // Kamerafahrt im Hauptmenü
@@ -713,7 +1052,7 @@ function tick(dt) {
     camera.position.set(Math.cos(menuAngle) * 40, 26, Math.sin(menuAngle) * 40);
     camera.lookAt(0, 2, 0);
     world.update(dt * 0.4, camera.position);
-    buildings.update(dt);
+    buildings.update(dt, world.wind);
     effects.update(dt);
   } else if (game.state === 'playing') {
     world.update(dt, player.pos);
@@ -721,33 +1060,68 @@ function tick(dt) {
       game.firstNightHintShown = true;
       ui.toast('Die Nacht bricht herein… Wölfe werden aggressiv!', 'hint');
     }
-    player.update(dt);
+    if (world.nightfall) {
+      const bloodMoon = world.day % 3 === 0;
+      game.raidTimer = bloodMoon ? 7 : 15;
+      if (game.nightAnnouncedDay !== world.day) {
+        game.nightAnnouncedDay = world.day;
+        ui.toast(bloodMoon ? 'BLUTNACHT — das Rudel jagt dich!' : `Nacht ${world.day} — die Wildnis wird gefährlicher.`, 'hint');
+        sfx.growl();
+      }
+    }
+    const movement = game.boat ? updateRaft(dt) : player.update(dt);
     document.body.classList.toggle('underwater', player.underwater);
     touch?.setSwimming(player.swimming);
     updateFireDamage(dt);
     const starve = player.updateStats(dt);
-    if (player.hp <= 0) die(starve === 'starving' ? 'Du bist verhungert.' : starve === 'drowning' ? 'Du bist ertrunken.' : 'Ein Wolf hat dich erwischt.');
+    const survival = updateSurvival(dt);
+    if (player.hp <= 0) die(
+      survival === 'thirst' ? 'Du bist verdurstet.'
+        : survival === 'cold' ? 'Du bist erfroren.'
+          : starve === 'starving' ? 'Du bist verhungert.'
+            : starve === 'drowning' ? 'Du bist ertrunken.' : 'Ein Tier hat dich erwischt.'
+    );
 
-    resources.update(dt);
-    buildings.update(dt);
+    updateTorch(dt);
+    updateFootsteps(dt, movement);
+    updateAmbient(dt);
+    resources.update(dt, world.wind);
+    buildings.tickFuel(dt, world.rainIntensity);
+    buildings.update(dt, world.wind);
     buildings.updateGhost(camera, world.terrain);
+    // Aktive Feuer + getragene Fackel halten Wölfe fern
+    const fires = buildings.activeFires();
+    if (torchHeld()) fires.push({ x: player.pos.x, z: player.pos.z });
+    const threat = Math.min(10, world.day + (world.day % 3 === 0 ? 2 : 0));
+    if (world.night) {
+      game.raidTimer -= dt;
+      const wolfCount = animals.list.filter((a) => a.kind === 'wolf').length;
+      const maxWolves = 5 + Math.min(7, Math.ceil(world.day / 2)) + (world.day % 3 === 0 ? 2 : 0);
+      if (game.raidTimer <= 0 && wolfCount < maxWolves) {
+        animals.spawnNear('wolf', player.pos);
+        game.raidTimer = Math.max(12, 34 - world.day * 2) * (world.day % 3 === 0 ? 0.65 : 1);
+        ui.toast('Du hörst ein Rudel in der Dunkelheit…', 'hint');
+        sfx.growl();
+      }
+    }
     animals.update(dt, {
       playerPos: player.pos,
       night: world.night,
-      fires: buildings.fires,
+      threat,
+      fires,
       animalObstacles: [...buildings.animalObstacles, ...landmarks.obstacles],
       time: now / 1000,
-      hurtPlayer: (n) => player.damage(n),
+      hurtPlayer: (n, cause) => player.damage(n, cause),
     });
     aquatics.update(dt, now / 1000);
     effects.update(dt);
-    updateFlyingSpears(dt);
+    updateFlyingArrows(dt);
     const discovery = landmarks.update(player.pos, game.discoveries);
     if (discovery) discoverLandmark(discovery);
     updateHUD();
   } else {
     // Pause/Craft/Tod: Welt einfrieren, aber weiter rendern
-    buildings.update(dt);
+    buildings.update(dt, world.wind);
     effects.update(dt);
     if (game.state === 'dead') ui.setRespawnCountdown(game.respawnAt - Date.now());
   }
@@ -804,5 +1178,16 @@ ui.showHud(false);
 refreshInv();
 updateTutorial(true);
 
+// Intro-Musik im Titelmenü starten. Browser blockieren Autoplay ohne Geste –
+// deshalb zusätzlich beim ersten Klick/Tastendruck erneut versuchen.
+music.play();
+function primeMusicOnGesture() {
+  if (game.state === 'menu' && !sfx.muted) music.play();
+  removeEventListener('pointerdown', primeMusicOnGesture);
+  removeEventListener('keydown', primeMusicOnGesture);
+}
+addEventListener('pointerdown', primeMusicOnGesture);
+addEventListener('keydown', primeMusicOnGesture);
+
 // Debug-Zugriff in der Konsole
-window.G = { game, world, player, animals, aquatics, landmarks, buildings, resources, scene, camera, addItem, tick };
+window.G = { game, world, player, animals, aquatics, landmarks, buildings, resources, scene, camera, addItem, tick, music };

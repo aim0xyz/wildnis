@@ -9,9 +9,13 @@ export class UI {
     this.hud = $('hud');
     this.hpFill = $('hpFill');
     this.hungerFill = $('hungerFill');
+    this.thirstFill = $('thirstFill');
+    this.staminaFill = $('staminaFill');
+    this.warmthFill = $('warmthFill');
     this.oxygenFill = $('oxygenFill');
     this.oxygenBar = $('oxygenBar');
     this.dayLabel = $('dayLabel');
+    this.threatPanel = $('threatPanel');
     this.timeIcon = $('timeIcon');
     this.matPanel = $('matPanel');
     this.objectivePanel = $('objectivePanel');
@@ -42,12 +46,24 @@ export class UI {
     this.hud.classList.toggle('hidden', !show);
   }
 
-  setBars(hp, hunger, starving, oxygen = 100, showOxygen = false) {
+  setBars(hp, hunger, starving, oxygen = 100, showOxygen = false, stamina = 100, thirst = 100, warmth = 100) {
     this.hpFill.style.width = `${hp}%`;
     this.hungerFill.style.width = `${hunger}%`;
     this.hungerFill.parentElement.classList.toggle('warn', starving);
+    this.staminaFill.style.width = `${stamina}%`;
+    this.staminaFill.parentElement.classList.toggle('warn', stamina < 15);
+    this.thirstFill.style.width = `${thirst}%`;
+    this.thirstFill.parentElement.classList.toggle('warn', thirst < 15);
+    this.warmthFill.style.width = `${warmth}%`;
+    this.warmthFill.parentElement.classList.toggle('warn', warmth < 18);
     this.oxygenFill.style.width = `${oxygen}%`;
     this.oxygenBar.classList.toggle('hidden', !showOxygen);
+  }
+
+  setThreat(show, level = 1, bloodMoon = false) {
+    this.threatPanel.classList.toggle('hidden', !show);
+    this.threatPanel.classList.toggle('blood', bloodMoon);
+    if (show) this.threatPanel.textContent = bloodMoon ? `Blutnacht · Gefahr ${level}` : `Nacht · Gefahr ${level}`;
   }
 
   setClock(day, elevation) {
@@ -68,14 +84,30 @@ export class UI {
     this.objectivePanel.classList.toggle('done', done);
   }
 
-  renderHotbar(hotbar, idx, inv) {
+  renderHotbar(hotbar, idx, inv, dura = {}) {
     this.hotbarEl.innerHTML = hotbar
       .map((id, i) => {
         const def = ITEMS[id];
-        const count = def.type === 'material' || def.type === 'food' || def.type === 'placeable'
-          ? `<span class="count">${inv[id] || 0}</span>` : '';
-        return `<div class="slot ${i === idx ? 'sel' : ''}" data-i="${i}" title="${def.name}">
-          <span class="key">${i + 1}</span><span class="itemIcon">${icon(def.icon)}</span>${count}
+        // Feste Werkzeug-Slots ohne Besitz werden ausgegraut dargestellt
+        const usable = id === 'hand' || (inv[id] || 0) > 0;
+        let count = '', bar = '';
+        if (usable) {
+          // Bogen zeigt die Pfeil-Munition oben rechts an
+          if (id === 'bogen') {
+            count = `<span class="ammo" title="Pfeile">${icon('arrow')}${inv.pfeil || 0}</span>`;
+          } else if (def.type === 'material' || def.type === 'food' || def.type === 'placeable') {
+            count = `<span class="count">${inv[id] || 0}</span>`;
+          }
+          // Haltbarkeitsbalken für Werkzeuge mit Verschleiß
+          if (def.dura) {
+            const cur = dura[id] ?? def.dura;
+            const pct = Math.max(0, Math.min(1, cur / def.dura));
+            const cls = pct > 0.5 ? '' : pct > 0.25 ? 'mid' : 'low';
+            bar = `<span class="dura ${cls}"><i style="width:${(pct * 100).toFixed(0)}%"></i></span>`;
+          }
+        }
+        return `<div class="slot ${i === idx ? 'sel' : ''} ${usable ? '' : 'empty'}" data-i="${i}" data-id="${id}" title="${def.name}">
+          <span class="key">${i + 1}</span><span class="itemIcon">${icon(def.icon)}</span>${count}${bar}
         </div>`;
       })
       .join('');
@@ -86,6 +118,18 @@ export class UI {
         if (this.onSelectSlot) this.onSelectSlot(+el.dataset.i);
       });
     }
+  }
+
+  // Aktualisiert nur den Haltbarkeitsbalken eines Slots (z.B. Fackel, die live herunterbrennt)
+  updateDuraBar(id, pct) {
+    const slot = this.hotbarEl.querySelector(`.slot[data-id="${id}"]`);
+    if (!slot) return;
+    const bar = slot.querySelector('.dura');
+    const fill = slot.querySelector('.dura i');
+    if (!bar || !fill) return;
+    const p = Math.max(0, Math.min(1, pct));
+    fill.style.width = `${(p * 100).toFixed(0)}%`;
+    bar.className = `dura ${p > 0.5 ? '' : p > 0.25 ? 'mid' : 'low'}`;
   }
 
   showSelName(name) {

@@ -11,6 +11,8 @@ const DEFS = {
   wall: { name: 'Holzwand', r: 0.45, connectable: true, blocksAnimals: true, blocksPlayer: true },
   gate: { name: 'Wildtor', r: 0.45, connectable: true, blocksAnimals: true, blocksPlayer: false },
   tent: { name: 'Zelt', r: 1.5, spawn: true },
+  raincatcher: { name: 'Regenfänger', r: 1.15 },
+  raft: { name: 'Floß', r: 1.45, blocksPlayer: false, waterOnly: true },
 };
 
 function buildCampfire() {
@@ -128,7 +130,47 @@ function buildTent() {
   return g;
 }
 
-const BUILDERS = { campfire: buildCampfire, torch: buildTorch, wall: buildWall, gate: buildGate, tent: buildTent };
+function buildRaincatcher() {
+  const g = new THREE.Group();
+  for (const sx of [-0.85, 0.85]) for (const sz of [-0.65, 0.65]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 1.25, 5), std(0x68472d));
+    leg.position.set(sx, 0.62, sz); leg.castShadow = true; g.add(leg);
+  }
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 0.62, 0.38, 8, 1, true), std(0x6f8b73));
+  basin.position.y = 1.18; basin.rotation.y = Math.PI / 8; g.add(basin);
+  const water = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 0.88, 0.035, 8), new THREE.MeshStandardMaterial({ color: 0x4ba7cf, transparent: true, opacity: 0.72 }));
+  water.position.y = 1.31; water.visible = false; g.add(water);
+  g.userData.waterSurface = water;
+  return g;
+}
+
+function buildRaft() {
+  const g = new THREE.Group();
+  for (let i = -3; i <= 3; i++) {
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 3.2, 7), std(i % 2 ? 0x76502e : 0x845b34));
+    log.rotation.x = Math.PI / 2;
+    log.position.set(i * 0.32, 0.12, 0);
+    log.castShadow = true; g.add(log);
+  }
+  for (const z of [-1.05, 1.05]) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(2.25, 0.13, 0.2), std(0x553820));
+    beam.position.set(0, 0.28, z); g.add(beam);
+  }
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, 2.8, 6), std(0x5d4027));
+  pole.position.set(0, 1.55, 0.25); g.add(pole);
+  const sail = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.7), new THREE.MeshStandardMaterial({ color: 0xd8c59d, side: THREE.DoubleSide, roughness: 1 }));
+  sail.position.set(0, 1.65, 0.3); sail.rotation.y = Math.PI / 2; g.add(sail);
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.18, 0.38), std(0x664427));
+  seat.position.set(0, 0.5, -0.45); g.add(seat);
+  return g;
+}
+
+const BUILDERS = { campfire: buildCampfire, torch: buildTorch, wall: buildWall, gate: buildGate, tent: buildTent, raincatcher: buildRaincatcher, raft: buildRaft };
+
+// Lagerfeuer-Brennstoff (in Sekunden Brenndauer)
+const CAMPFIRE_MAX_FUEL = 180;   // maximaler Vorrat
+const CAMPFIRE_INIT_FUEL = 90;   // frisch gebaut
+export const CAMPFIRE_WOOD_FUEL = 45; // ein Holz füllt so viel nach
 
 export class Buildings {
   constructor(scene) {
@@ -138,9 +180,10 @@ export class Buildings {
     this.placed = []; // {type, x, z, rot, group}
     this.obstacles = []; // {x, z, r}
     this.animalObstacles = []; // Wände und Tore; Tore bleiben für Spieler passierbar
-    this.fires = []; // {x, z}
+    this.fires = []; // {x, z, building}
     this.lights = []; // {light, base}
     this.onTentPlaced = null;
+    this.onFireOut = null; // Callback wenn ein Lagerfeuer ausgeht
 
     this.ghostMatOk = new THREE.MeshBasicMaterial({ color: 0x4dff7c, transparent: true, opacity: 0.45, depthWrite: false });
     this.ghostMatBad = new THREE.MeshBasicMaterial({ color: 0xff4d4d, transparent: true, opacity: 0.45, depthWrite: false });
@@ -205,11 +248,12 @@ export class Buildings {
       }
     } else if (DEFS[this.ghostType].connectable) this.snapToWallEnd(p);
     const h = terrainHeight(p.x, p.z);
+    const waterOnly = DEFS[this.ghostType].waterOnly;
     this.ghost.visible = true;
-    this.ghost.position.set(p.x, h, p.z);
+    this.ghost.position.set(p.x, waterOnly ? WATER_Y + 0.05 : h, p.z);
     this.ghost.rotation.y = this.ghostRot;
 
-    let valid = !!this.ghostReplaceWall || (h > WATER_Y + 0.25 && terrainSlope(p.x, p.z) < 0.45);
+    let valid = !!this.ghostReplaceWall || (waterOnly ? h < WATER_Y - 0.55 : (h > WATER_Y + 0.25 && terrainSlope(p.x, p.z) < 0.45));
     if (valid) {
       const def = DEFS[this.ghostType];
       for (const b of this.placed) {
@@ -298,6 +342,8 @@ export class Buildings {
       wall: { holz: 2 }, gate: { holz: 2, stein: 1 },
       torch: { holz: 1 }, campfire: { holz: 2, stein: 1 },
       tent: { holz: 5, fell: 1 },
+      raincatcher: { holz: 3, stein: 1 },
+      raft: { holz: 8 },
     };
     this.removeBuilding(building);
     return refunds[building.type] || {};
@@ -327,10 +373,12 @@ export class Buildings {
   place(type, x, z, rot) {
     const def = DEFS[type];
     const g = BUILDERS[type]();
-    g.position.set(x, terrainHeight(x, z), z);
+    g.position.set(x, def.waterOnly ? WATER_Y + 0.05 : terrainHeight(x, z), z);
     g.rotation.y = rot;
     this.group.add(g);
     const building = { type, x, z, rot, group: g, open: false };
+    if (type === 'raft') { building.speed = 0; building.turnSpeed = 0; }
+    if (type === 'raincatcher') { building.water = 0; building.maxWater = 100; }
     g.userData.building = building;
     this.placed.push(building);
     if (def.connectable) {
@@ -345,6 +393,10 @@ export class Buildings {
     }
     if (type === 'gate') this.clearPlayerPassage(building);
     if (def.fire) {
+      const isCamp = type === 'campfire';
+      building.maxFuel = isCamp ? CAMPFIRE_MAX_FUEL : Infinity;
+      building.fuel = isCamp ? CAMPFIRE_INIT_FUEL : Infinity;
+      building.lit = true;
       this.fires.push({ x, z, building });
       const light = new THREE.PointLight(def.lightColor, def.lightI, def.lightD, 1.6);
       light.position.set(x, terrainHeight(x, z) + (type === 'torch' ? 1.4 : 1.0), z);
@@ -365,7 +417,46 @@ export class Buildings {
     return best;
   }
 
-  update(dt) {
+  // Verbrennt den Brennstoff der Lagerfeuer. Nur im Spielzustand aufrufen,
+  // damit Feuer nicht während Pause/Menü ausgehen.
+  tickFuel(dt, rainIntensity = 0) {
+    for (const b of this.placed) {
+      if (b.type === 'raincatcher') {
+        b.water = Math.min(b.maxWater, b.water + rainIntensity * 2.2 * dt);
+        continue;
+      }
+      if (b.type !== 'campfire' || !b.lit) continue;
+      b.fuel -= dt;
+      if (b.fuel <= 0) {
+        b.fuel = 0;
+        b.lit = false;
+        if (this.onFireOut) this.onFireOut(b);
+      }
+    }
+  }
+
+  // Feuer mit Holz nachlegen / wieder anzünden. Gibt true zurück bei Erfolg.
+  refuel(building, seconds) {
+    if (!building || building.type !== 'campfire') return false;
+    if (building.fuel >= building.maxFuel) return false;
+    building.fuel = Math.min(building.maxFuel, building.fuel + seconds);
+    building.lit = building.fuel > 0;
+    return true;
+  }
+
+  // Positionen aktuell brennender Feuer (für die Wolfsabwehr).
+  activeFires() {
+    return this.fires.filter((f) => f.building.lit !== false).map((f) => ({ x: f.x, z: f.z }));
+  }
+
+  drinkFrom(building, amount = 30) {
+    if (!building || building.type !== 'raincatcher' || building.water < 1) return 0;
+    const taken = Math.min(amount, building.water);
+    building.water -= taken;
+    return taken;
+  }
+
+  update(dt, wind = null) {
     const t = performance.now() * 0.001;
     for (const b of this.placed) {
       if (b.type === 'gate') {
@@ -374,21 +465,39 @@ export class Buildings {
         door.rotation.y += (target - door.rotation.y) * Math.min(1, dt * 10);
       }
       const flames = b.group.userData.flames;
+      if (b.type === 'raincatcher' && b.group.userData.waterSurface) {
+        const surface = b.group.userData.waterSurface;
+        surface.visible = b.water > 1;
+        surface.scale.setScalar(0.65 + Math.min(1, b.water / b.maxWater) * 0.35);
+      }
       if (flames) {
-        flames.children.forEach((f, i) => {
-          const s = 0.85 + Math.sin(t * 9 + i * 2.1 + b.x) * 0.18;
-          f.scale.set(s, 0.8 + Math.sin(t * 11 + i * 1.3) * 0.25, s);
-          f.rotation.y += dt * 2;
-        });
+        const lit = b.lit !== false;
+        flames.visible = lit;
+        // Flammen schrumpfen, wenn der Brennstoff zur Neige geht
+        const fuelFrac = b.maxFuel && isFinite(b.maxFuel) ? Math.min(1, b.fuel / (b.maxFuel * 0.4)) : 1;
+        if (lit) {
+          const windForce = wind ? Math.hypot(wind.x, wind.z) : 0;
+          flames.rotation.z = wind ? -wind.x * 0.18 : 0;
+          flames.rotation.x = wind ? wind.z * 0.18 : 0;
+          flames.children.forEach((f, i) => {
+            const s = (0.85 + Math.sin(t * (9 + windForce * 5) + i * 2.1 + b.x) * (0.18 + windForce * 0.05)) * (0.5 + fuelFrac * 0.5);
+            f.scale.set(s, (0.8 + Math.sin(t * 11 + i * 1.3) * 0.25) * (0.5 + fuelFrac * 0.5), s);
+            f.rotation.y += dt * 2;
+          });
+        }
       }
     }
     for (const l of this.lights) {
-      l.light.intensity = l.base * (0.85 + Math.sin(t * 12 + l.light.position.x) * 0.12 + Math.random() * 0.06);
+      const lit = l.building.lit !== false;
+      if (!lit) { l.light.intensity = 0; continue; }
+      const fuelFrac = l.building.maxFuel && isFinite(l.building.maxFuel)
+        ? Math.min(1, l.building.fuel / (l.building.maxFuel * 0.4)) : 1;
+      l.light.intensity = l.base * (0.5 + fuelFrac * 0.5) * (0.85 + Math.sin(t * 12 + l.light.position.x) * 0.12 + Math.random() * 0.06);
     }
   }
 
   serialize() {
-    return this.placed.map((b) => ({ type: b.type, x: b.x, z: b.z, rot: b.rot, open: !!b.open }));
+    return this.placed.map((b) => ({ type: b.type, x: b.x, z: b.z, rot: b.rot, open: !!b.open, fuel: b.fuel, water: b.water }));
   }
 
   load(list) {
@@ -396,6 +505,11 @@ export class Buildings {
       this.place(b.type, b.x, b.z, b.rot);
       const placed = this.placed[this.placed.length - 1];
       if (b.type === 'gate' && b.open) this.toggleGate(placed);
+      if (b.type === 'campfire' && typeof b.fuel === 'number') {
+        placed.fuel = Math.max(0, Math.min(placed.maxFuel, b.fuel));
+        placed.lit = placed.fuel > 0;
+      }
+      if (b.type === 'raincatcher' && typeof b.water === 'number') placed.water = Math.max(0, Math.min(placed.maxWater, b.water));
     }
   }
 }

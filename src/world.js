@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { fbm, mulberry32 } from './noise.js';
 
 export const WATER_Y = 0;
-export const WORLD_RADIUS = 230;
-const SIZE = 480;
-const SEGS = 110;
+export const WORLD_RADIUS = 320;
+const SIZE = 660;
+const SEGS = 132;
 const DAY_SECONDS = 8 * 60;
 const NIGHT_SECONDS = 3 * 60;
 
@@ -35,6 +35,7 @@ const C_SNOW = new THREE.Color(0xf2f4f8);
 const SKY_DAY = new THREE.Color(0x7ec8e8);
 const SKY_DUSK = new THREE.Color(0xf79862);
 const SKY_NIGHT = new THREE.Color(0x0d1226);
+const SKY_STORM = new THREE.Color(0x59626b);
 const SUN_DAY = new THREE.Color(0xfff2cc);
 const SUN_DUSK = new THREE.Color(0xff9d5c);
 
@@ -58,6 +59,8 @@ export class World {
     this.buildReeds();
     this.buildFireflies();
     this.buildClouds();
+    this.buildBirds();
+    this.buildRain();
   }
 
   buildTerrain() {
@@ -310,6 +313,139 @@ export class World {
     }
   }
 
+  buildBirds() {
+    this.birds = [];
+    const rand = mulberry32(313);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x2b2b34, flatShading: true, roughness: 1 });
+    for (let i = 0; i < 7; i++) {
+      const g = new THREE.Group();
+      for (const s of [-1, 1]) {
+        const wing = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.07, 0.5), mat);
+        wing.position.x = s * 0.8;
+        g.add(wing);
+      }
+      g.userData = {
+        radius: 20 + rand() * 45,
+        height: 32 + rand() * 24,
+        speed: (0.08 + rand() * 0.12) * (rand() < 0.5 ? -1 : 1),
+        phase: rand() * Math.PI * 2,
+        flap: rand() * Math.PI * 2,
+      };
+      g.scale.setScalar(0.55 + rand() * 0.35);
+      this.scene.add(g);
+      this.birds.push(g);
+    }
+  }
+
+  buildRain() {
+    this.weather = 'clear';        // clear | rain | storm
+    this.rainIntensity = 0;        // 0..1 gleitend
+    this.weatherTimer = 45 + Math.random() * 45;
+    this.flash = 0;                // Blitz-Helligkeit (klingt ab)
+    this.onThunder = null;         // Callback (dist 0..1) für Donner-Sound
+    this._flashColor = new THREE.Color(0xdfe8ff);
+    // Träger Wind statt Zufallswackeln: Richtung und Stärke ändern sich langsam.
+    this.wind = { x: 0.35, z: 0.1, speed: 0.18, gust: 0, angle: 0.28 };
+    this.windTarget = { angle: 0.28, speed: 0.2 };
+    this.windTimer = 18 + Math.random() * 25;
+    this.gustTimer = 5 + Math.random() * 9;
+
+    const count = 1300;
+    this.rainCount = count;
+    this.rainRadius = 26;
+    this.rainDrops = [];
+    for (let i = 0; i < count; i++) {
+      this.rainDrops.push({
+        x: (Math.random() - 0.5) * 2 * this.rainRadius,
+        z: (Math.random() - 0.5) * 2 * this.rainRadius,
+        y: Math.random() * 24,
+      });
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 2 * 3), 3));
+    const mat = new THREE.LineBasicMaterial({ color: 0xaccbe6, transparent: true, opacity: 0 });
+    this.rain = new THREE.LineSegments(geo, mat);
+    this.rain.frustumCulled = false;
+    this.rain.visible = false;
+    this.scene.add(this.rain);
+  }
+
+  updateWeather(dt) {
+    // Wetterzustand periodisch wechseln
+    this.weatherTimer -= dt;
+    if (this.weatherTimer <= 0) {
+      const r = Math.random();
+      if (this.weather === 'clear') {
+        this.weather = r < 0.32 ? 'rain' : r < 0.46 ? 'storm' : 'clear';
+        this.weatherTimer = this.weather === 'clear' ? 40 + Math.random() * 45 : 40 + Math.random() * 40;
+      } else {
+        this.weather = r < 0.68 ? 'clear' : this.weather === 'rain' ? 'storm' : 'rain';
+        this.weatherTimer = this.weather === 'clear' ? 60 + Math.random() * 60 : 25 + Math.random() * 35;
+      }
+    }
+    const target = this.weather === 'clear' ? 0 : this.weather === 'storm' ? 1 : 0.65;
+    this.rainIntensity += (target - this.rainIntensity) * Math.min(1, dt * 0.4);
+    if (this.rainIntensity < 0.001) this.rainIntensity = 0;
+
+    // Blitz & Donner im Sturm
+    this.flash *= Math.max(0, 1 - dt * 3.2);
+    if (this.weather === 'storm' && this.rainIntensity > 0.55 && Math.random() < dt * 0.09) {
+      this.flash = 1;
+      const dist = 0.25 + Math.random() * 0.75; // 1 = nah
+      const delay = (1 - dist) * 3200 + 250;
+      if (this.onThunder) setTimeout(() => this.onThunder(dist), delay);
+    }
+  }
+
+  updateWind(dt) {
+    this.windTimer -= dt;
+    if (this.windTimer <= 0) {
+      this.windTarget.angle += (Math.random() - 0.5) * 1.35;
+      const base = this.weather === 'storm' ? 0.82 : this.weather === 'rain' ? 0.5 : 0.2;
+      this.windTarget.speed = THREE.MathUtils.clamp(base + (Math.random() - 0.5) * 0.25, 0.06, 1);
+      this.windTimer = 22 + Math.random() * 38;
+    }
+    this.gustTimer -= dt;
+    if (this.gustTimer <= 0) {
+      this.wind.gust = (0.12 + Math.random() * 0.3) * (this.weather === 'storm' ? 1.6 : 1);
+      this.gustTimer = 4 + Math.random() * 10;
+    }
+    this.wind.gust = Math.max(0, this.wind.gust - dt * 0.16);
+    let delta = this.windTarget.angle - this.wind.angle;
+    delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+    this.wind.angle += delta * Math.min(1, dt * 0.08);
+    this.wind.speed += (this.windTarget.speed - this.wind.speed) * Math.min(1, dt * 0.12);
+    const force = THREE.MathUtils.clamp(this.wind.speed + this.wind.gust, 0, 1.25);
+    this.wind.x = Math.cos(this.wind.angle) * force;
+    this.wind.z = Math.sin(this.wind.angle) * force;
+  }
+
+  updateRain(dt, playerPos) {
+    const mat = this.rain.material;
+    mat.opacity = this.rainIntensity * 0.5;
+    if (this.rainIntensity <= 0.01) { this.rain.visible = false; return; }
+    this.rain.visible = true;
+    const pos = this.rain.geometry.attributes.position.array;
+    const R = this.rainRadius;
+    const speed = 52 + this.rainIntensity * 18;
+    const streak = 0.7 + this.rainIntensity * 0.5;
+    for (let i = 0; i < this.rainCount; i++) {
+      const d = this.rainDrops[i];
+      d.y -= speed * dt;
+      if (d.y < 0) {
+        d.y += 22 + Math.random() * 4;
+        d.x = (Math.random() - 0.5) * 2 * R;
+        d.z = (Math.random() - 0.5) * 2 * R;
+      }
+      const bx = playerPos.x + d.x, bz = playerPos.z + d.z, by = playerPos.y + d.y;
+      const j = i * 6;
+      pos[j] = bx; pos[j + 1] = by; pos[j + 2] = bz;
+      const drift = 0.42 + this.rainIntensity * 0.3;
+      pos[j + 3] = bx - this.wind.x * drift; pos[j + 4] = by - streak; pos[j + 5] = bz - this.wind.z * drift;
+    }
+    this.rain.geometry.attributes.position.needsUpdate = true;
+  }
+
   // Nachts schlafen -> Morgen
   sleep() {
     if (this.t >= 0.7) this.day++;
@@ -330,12 +466,16 @@ export class World {
     this.night = elev < -0.02;
     this.nightfall = !wasNight && this.night;
 
+    this.updateWeather(dt);
+    this.updateWind(dt);
+    const rain = this.rainIntensity;
+
     const sunDir = new THREE.Vector3(Math.cos(ang), Math.sin(ang), 0.35).normalize();
 
     // Sonne + Schattenkamera folgt dem Spieler
     this.sun.position.copy(playerPos).addScaledVector(sunDir, 100);
     this.sun.target.position.copy(playerPos);
-    this.sun.intensity = THREE.MathUtils.clamp(elev * 3.2, 0, 2.6);
+    this.sun.intensity = THREE.MathUtils.clamp(elev * 3.2, 0, 2.6) * (1 - rain * 0.7);
     this.sun.color.lerpColors(SUN_DUSK, SUN_DAY, THREE.MathUtils.clamp(elev * 3, 0, 1));
     this.sunMesh.position.copy(playerPos).addScaledVector(sunDir, 380);
 
@@ -347,7 +487,7 @@ export class World {
     this.moonMesh.position.copy(playerPos).addScaledVector(moonDir, 380);
     this.moonMesh.visible = elev < 0.1;
 
-    this.hemi.intensity = 0.22 + THREE.MathUtils.clamp(elev, 0, 1) * 0.85;
+    this.hemi.intensity = (0.22 + THREE.MathUtils.clamp(elev, 0, 1) * 0.85) * (1 - rain * 0.35) + this.flash * 1.4;
 
     // Himmel/Nebel-Farbe
     const sky = this.scene.background;
@@ -355,7 +495,11 @@ export class World {
     else if (elev > 0) sky.lerpColors(SKY_DUSK, SKY_DAY, elev / 0.25);
     else if (elev > -0.18) sky.lerpColors(SKY_NIGHT, SKY_DUSK, (elev + 0.18) / 0.18);
     else sky.copy(SKY_NIGHT);
+    // Regen zieht den Himmel ins Graue, ein Blitz lässt ihn kurz aufhellen
+    if (rain > 0) sky.lerp(SKY_STORM, rain * 0.6 * THREE.MathUtils.clamp(elev + 0.3, 0.15, 1));
+    if (this.flash > 0.01) sky.lerp(this._flashColor, this.flash * 0.55);
     this.scene.fog.color.copy(sky);
+    this.scene.fog.far = 260 - rain * 120;
 
     this.stars.material.opacity = THREE.MathUtils.clamp(-elev * 4, 0, 1);
     this.stars.position.set(playerPos.x, 0, playerPos.z);
@@ -365,11 +509,35 @@ export class World {
 
     // Wolken driften
     for (const c of this.clouds) {
-      c.position.x += c.userData.speed * dt;
+      c.position.x += (c.userData.speed + this.wind.x * 2.2) * dt;
+      c.position.z += this.wind.z * 2.2 * dt;
       if (c.position.x > 300) c.position.x = -300;
+      if (c.position.x < -300) c.position.x = 300;
+      if (c.position.z > 300) c.position.z = -300;
+      if (c.position.z < -300) c.position.z = 300;
     }
 
     this.water.position.y = WATER_Y + Math.sin(performance.now() * 0.001) * 0.06;
     this.water.material.color.setHex(elev < -0.05 ? 0x153f67 : elev < 0.2 ? 0x397da2 : 0x2f86bd);
+
+    // Vögel kreisen tagsüber über dem Spieler und schlagen mit den Flügeln
+    const dayAmt = THREE.MathUtils.clamp(elev * 5, 0, 1);
+    for (const b of this.birds) {
+      const u = b.userData;
+      u.phase += dt * u.speed;
+      u.flap += dt * 7;
+      b.position.set(
+        playerPos.x + Math.cos(u.phase) * u.radius,
+        u.height + Math.sin(u.phase * 2) * 1.6,
+        playerPos.z + Math.sin(u.phase) * u.radius,
+      );
+      b.rotation.y = -u.phase + (u.speed > 0 ? -Math.PI / 2 : Math.PI / 2);
+      const flap = Math.sin(u.flap) * 0.5;
+      b.children[0].rotation.z = 0.35 + flap;
+      b.children[1].rotation.z = -0.35 - flap;
+      b.visible = dayAmt > 0.05 && this.rainIntensity < 0.35;
+    }
+
+    this.updateRain(dt, playerPos);
   }
 }

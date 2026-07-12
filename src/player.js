@@ -16,7 +16,11 @@ export class Player {
     this.grounded = true;
     this.hp = 100;
     this.hunger = 100;
+    this.thirst = 100;
+    this.warmth = 100;
     this.oxygen = 100;
+    this.stamina = 100;
+    this.exhausted = false;
     this.keys = {};
     this.vel = new THREE.Vector3();
     this.bobT = 0;
@@ -131,20 +135,65 @@ export class Player {
         g.rotation.y = Math.PI / 2;
         return g;
       }),
-      speer: mk(() => {
+      bogen: mk(() => {
         const g = new THREE.Group();
-        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.032, 1.45, 7), std(0x744824));
-        shaft.position.z = -0.18;
-        shaft.rotation.x = -Math.PI / 2;
-        g.add(shaft);
-        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.28, 6), std(0xb8bec6));
-        tip.position.set(0, 0, -1.04);
-        tip.rotation.x = -Math.PI / 2;
-        g.add(tip);
-        const wrap = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.18, 7), std(0x503321));
-        wrap.position.z = -0.86;
-        wrap.rotation.x = -Math.PI / 2;
-        g.add(wrap);
+        // Zwei Wurfarme, deren Enden leicht nach vorn gebogen sind
+        for (const s of [-1, 1]) {
+          const limb = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.03, 0.52, 6), std(0x744824));
+          limb.position.set(0, s * 0.25, -0.02);
+          limb.rotation.x = s * 0.4;
+          g.add(limb);
+        }
+        // Griff in der Mitte
+        const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, 0.17, 8), std(0x503321));
+        g.add(grip);
+        // Sehne
+        const string = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.94, 4), std(0xece3cf));
+        string.position.z = 0.12;
+        g.add(string);
+        // Aufgelegter Pfeil
+        const arrow = new THREE.Group();
+        const ashaft = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.72, 5), std(0x9a7b4f));
+        ashaft.rotation.x = Math.PI / 2;
+        ashaft.position.set(0, 0, -0.14);
+        arrow.add(ashaft);
+        const ahead = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.1, 5), std(0xb8bec6));
+        ahead.rotation.x = -Math.PI / 2;
+        ahead.position.set(0, 0, -0.52);
+        arrow.add(ahead);
+        arrow.position.z = 0.12;
+        g.add(arrow);
+        g.userData.arrow = arrow;
+        // Bogen aufrecht, leicht zur Seite gekippt in der linken Hand
+        g.rotation.set(0, 0.18, 0.06);
+        g.position.set(-0.08, 0.02, 0);
+        return g;
+      }),
+      fackel: mk(() => {
+        const g = new THREE.Group();
+        const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.045, 0.85, 6), std(0x6e4a2c));
+        stick.rotation.z = -0.35;
+        g.add(stick);
+        // getränkter Kopf
+        const head = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.05, 0.16, 6), std(0x2c2118));
+        head.position.set(0.14, 0.38, 0);
+        head.rotation.z = -0.35;
+        g.add(head);
+        // Flamme (mehrere Kegel, werden animiert)
+        const flames = new THREE.Group();
+        flames.position.set(0.16, 0.46, 0);
+        const cols = [0xff6b1a, 0xffa63d, 0xffe08a];
+        for (let i = 0; i < 3; i++) {
+          const f = new THREE.Mesh(
+            new THREE.ConeGeometry(0.11 - i * 0.028, 0.34 - i * 0.08, 6),
+            new THREE.MeshBasicMaterial({ color: cols[i], fog: false })
+          );
+          f.position.y = 0.12 + i * 0.05;
+          flames.add(f);
+        }
+        g.add(flames);
+        g.userData.flames = flames;
+        addGrip(g);
         return g;
       }),
       hammer: mk(() => {
@@ -167,6 +216,7 @@ export class Player {
   }
 
   setHeld(itemId) {
+    this.heldId = itemId;
     for (const [k, m] of Object.entries(this.heldModels)) {
       m.visible = k === itemId;
     }
@@ -191,7 +241,15 @@ export class Player {
     const f = touch?.enabled ? touch.vec.y : (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0);
     const s = touch?.enabled ? touch.vec.x : (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
     const wantSprint = touch?.enabled ? touch.sprint : k.ShiftLeft || k.ShiftRight;
-    this.sprinting = wantSprint && f > 0 && this.hunger > 5;
+    if (this.exhausted && this.stamina >= 28) this.exhausted = false;
+    this.sprinting = wantSprint && f > 0 && this.hunger > 5 && !this.exhausted && this.stamina > 0;
+    if (this.sprinting) {
+      this.stamina = Math.max(0, this.stamina - 24 * dt);
+      if (this.stamina <= 0) this.exhausted = true;
+    } else {
+      const recovery = this.hunger > 20 ? 17 : 9;
+      this.stamina = Math.min(100, this.stamina + recovery * dt);
+    }
 
     // vorwärts = -Z in Kamerarichtung, rechts = +X
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
@@ -280,13 +338,34 @@ export class Player {
 
     // Schwung-Animation für Werkzeug
     this.attackCd -= dt;
+    const bow = this.heldModels.bogen;
     if (this.swingT < 1) {
       this.swingT = Math.min(1, this.swingT + dt / 0.32);
-      this.held.rotation.x = -Math.sin(this.swingT * Math.PI) * 1.15;
+      if (this.heldId === 'bogen') {
+        // Bogen: Sehne spannen und Rückstoß statt Hieb
+        const draw = Math.sin(this.swingT * Math.PI);
+        this.held.rotation.x = 0;
+        this.held.position.z = -0.75 + draw * 0.1;
+        if (bow?.userData.arrow) bow.userData.arrow.position.z = 0.12 + draw * 0.16;
+      } else {
+        this.held.rotation.x = -Math.sin(this.swingT * Math.PI) * 1.15;
+      }
     } else {
       this.held.rotation.x = 0;
+      this.held.position.z = -0.75;
+      if (bow?.userData.arrow) bow.userData.arrow.position.z = 0.12;
       // Idle-Bob des Werkzeugs
       this.held.position.y = -0.38 + Math.sin(this.bobT * 4) * 0.007;
+    }
+
+    // Fackel-Flamme flackern lassen, solange die Fackel in der Hand ist
+    if (this.heldId === 'fackel') {
+      const flames = this.heldModels.fackel.userData.flames;
+      const t = performance.now() * 0.001;
+      flames.children.forEach((f, i) => {
+        const s = 0.8 + Math.sin(t * 13 + i * 2.1) * 0.22 + Math.random() * 0.06;
+        f.scale.set(s, 0.85 + Math.sin(t * 17 + i) * 0.25, s);
+      });
     }
 
     return { wading, swimming, underwater: this.underwater, moving: moveAmt > 0.3 };

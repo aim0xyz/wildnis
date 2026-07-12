@@ -44,15 +44,15 @@ export class Resources {
 
     const forest = (x, z) => fbm(x * 0.02 + 300, z * 0.02 + 300) > 0.42;
 
-    for (let i = 0; i < 190; i++) {
+    for (let i = 0; i < 285; i++) {
       const p = tryPlace(3, 0.6, 8.5, 0.55, forest);
       if (p) this.addResource('tree', p, rand);
     }
-    for (let i = 0; i < 70; i++) {
+    for (let i = 0; i < 105; i++) {
       const p = tryPlace(3.5, 0.5, 11, 0.9);
       if (p) this.addResource('rock', p, rand);
     }
-    for (let i = 0; i < 55; i++) {
+    for (let i = 0; i < 82; i++) {
       const p = tryPlace(4, 0.6, 6.5, 0.45);
       if (p) this.addResource('bush', p, rand);
     }
@@ -72,6 +72,8 @@ export class Resources {
       kind, group, hp, maxHp: hp,
       x: p.x, z: p.z, alive: true, respawnAt: 0, shakeT: 0,
       baseRotZ: 0,
+      windPhase: rand() * Math.PI * 2,
+      windFlex: kind === 'tree' ? 0.035 + rand() * 0.025 : kind === 'bush' ? 0.055 : 0,
     };
     group.traverse((m) => { m.userData.res = res; });
     this.list.push(res);
@@ -185,14 +187,20 @@ export class Resources {
     return { destroyed: false, drops: null, kind: res.kind, hint };
   }
 
-  update(dt) {
+  update(dt, wind = null) {
     const now = performance.now() / 1000;
     for (const res of this.list) {
+      const force = wind ? Math.hypot(wind.x, wind.z) : 0;
+      const pulse = 0.72 + Math.sin(now * (1.4 + force * 1.8) + res.windPhase) * 0.28;
+      const bend = res.windFlex * force * pulse;
       if (res.shakeT > 0) {
         res.shakeT -= dt;
         const s = Math.max(res.shakeT, 0);
-        res.group.rotation.z = Math.sin(s * 40) * s * 0.25;
-        if (s <= 0) res.group.rotation.z = 0;
+        res.group.rotation.z = Math.sin(s * 40) * s * 0.25 + (wind ? wind.x * bend : 0);
+        if (s <= 0) res.group.rotation.z = wind ? wind.x * bend : 0;
+      } else if (res.windFlex) {
+        res.group.rotation.z += ((wind ? wind.x * bend : 0) - res.group.rotation.z) * Math.min(1, dt * 5);
+        res.group.rotation.x += ((wind ? -wind.z * bend : 0) - res.group.rotation.x) * Math.min(1, dt * 5);
       }
       if (!res.alive && res.respawnAt > 0 && now >= res.respawnAt) {
         res.alive = true;
