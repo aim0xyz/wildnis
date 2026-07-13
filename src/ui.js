@@ -1,5 +1,6 @@
 import { ITEMS, RECIPES } from './items.js';
 import { icon, hydrateIcons } from './icons.js';
+import { biomeAt, terrainHeight, WATER_Y } from './world.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,6 +24,7 @@ export class UI {
     this.objectiveIcon = $('objectiveIcon');
     this.hotbarEl = $('hotbar');
     this.toasts = $('toasts');
+    this.saveStatus = $('saveStatus');
     this.promptEl = $('prompt');
     this.targetEl = $('targetName');
     this.craftEl = $('craft');
@@ -37,9 +39,31 @@ export class UI {
     this.vignette = $('vignette');
     this.sleepFade = $('sleepFade');
     this.selName = $('selName');
+    this.storageEl = $('storage');
+    this.storageTitle = $('storageTitle');
+    this.storagePlayer = $('storagePlayer');
+    this.storageContainer = $('storageContainer');
+    this.biomePanel = $('biomePanel');
+    this.levelLabel = $('levelLabel');
+    this.xpFill = $('xpFill');
+    this.xpLabel = $('xpLabel');
+    this.mapOverlay = $('mapOverlay');
+    this.worldMap = $('worldMap');
+    this.mapTerrain = $('mapTerrain');
+    this.mapMarkers = $('mapMarkers');
+    this.mapCoords = $('mapCoords');
+    this.radialMenu = $('radialMenu');
+    this.radialItems = $('radialItems');
+    this.radialName = $('radialName');
     this._selNameTimer = null;
     this.onCraft = null;
     this.onSelectSlot = null;
+    this.onStorageMove = null;
+    this.capacityProvider = null;
+    this.craftStation = 'hand';
+    this.craftCategory = 'tools';
+    this.playerLevel = 1;
+    this._saveTimer = null;
   }
 
   showHud(show) {
@@ -65,6 +89,62 @@ export class UI {
     this.threatPanel.classList.toggle('blood', bloodMoon);
     if (show) this.threatPanel.textContent = bloodMoon ? `Blutnacht · Gefahr ${level}` : `Nacht · Gefahr ${level}`;
   }
+  setBiome(name, compass = '') { this.biomePanel.textContent = `${name}${compass ? ` · ${compass}` : ''}`; }
+  setLevel(level, xp, current, next) {
+    this.playerLevel = level;
+    this.levelLabel.textContent = `Level ${level}`;
+    const span = Math.max(1, next - current);
+    this.xpFill.style.width = `${Math.max(0, Math.min(100, (xp - current) / span * 100))}%`;
+    this.xpLabel.textContent = level >= 7 ? `${xp} XP · MAX` : `${xp - current} / ${span} XP`;
+  }
+  showMap(show, player, landmarks = [], discovered = [], radius = 320, heading = 0, signal = null, playerLevel = 1) {
+    this.mapOverlay.classList.toggle('hidden', !show); if (!show) return;
+    this.drawMapTerrain(radius);
+    const pos = (x, z) => `left:${50 + x / radius * 47}%;top:${50 + z / radius * 47}%`;
+    const glyphs = { steinkreis: '◉', jaegerlager: '⌂', uralter_baum: '♣', kuestenwrack: '⚓', erzinsel: '◆', nordwacht: '♜', schattenhoehle: '▰', sternfall:'✦', versunkene_ruinen:'◫', ostpass:'♜', westheiligtum:'◉' };
+    const found = landmarks.filter((l) => discovered.includes(l.id));
+    const regions = [
+      ['Grasland',0,0,1], ['Dichter Wald',90,-70,2], ['Küste',-55,235,3],
+      ['Moorland',-455,305,4], ['Hochgebirge',440,-320,5], ['Äußere Wildnis',-440,20,6],
+    ];
+    const regionHtml = regions.map(([name,x,z,level]) => `<span class="mapRegion ${playerLevel < level ? 'locked' : ''}" style="${pos(x,z)}">${playerLevel < level ? '◇ ' : ''}${name}<small>Level ${level}</small></span>`).join('');
+    this.mapMarkers.innerHTML = regionHtml + found.map((l) => `<span class="mapLandmark" style="${pos(l.x,l.z)}" title="${l.name}"><i>${glyphs[l.id] || '◆'}</i><b>${l.name.replace(/^(Der|Die|Das) /, '')}</b></span>`).join('')
+      + (signal ? `<span class="mapSignal" style="${pos(signal.x,signal.z)}" title="Zeitlich begrenztes Expeditionssignal"><i></i><b>${signal.type === 'flare' ? 'Notsignal' : 'Rauchsäule'} · ${Math.ceil(signal.remaining)}s</b></span>` : '')
+      + `<span class="mapPlayer" style="${pos(player.x,player.z)};--heading:${-heading}rad" title="Deine Position"><i></i></span>`;
+    this.mapCoords.textContent = `X ${Math.round(player.x)} · Z ${Math.round(player.z)}`;
+    $('mapLegend').innerHTML = `<span><i class="legendPlayer"></i>Du & Blickrichtung</span><span><i class="legendPlace">◆</i>Entdeckter Ort</span>${signal ? '<span><i class="legendSignal"></i>Aktives Signal</span>' : ''}<b>${found.length}/${landmarks.length} Orte entdeckt</b>`;
+  }
+  drawMapTerrain(radius) {
+    if (this._mapTerrainRadius === radius) return;
+    this._mapTerrainRadius = radius;
+    const canvas = this.mapTerrain, ctx = canvas.getContext('2d');
+    const { width, height } = canvas, image = ctx.createImageData(width, height);
+    const colors = { coast:[202,181,119], meadow:[111,145,76], forest:[54,101,61], marsh:[91,111,75], alpine:[151,149,137] };
+    for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
+      const x = (px / (width - 1) * 2 - 1) * radius;
+      const z = (py / (height - 1) * 2 - 1) * radius;
+      const h = terrainHeight(x, z), biome = biomeAt(x, z).id;
+      let c = h < WATER_Y ? [45, 103, 126] : colors[biome] || colors.meadow;
+      const shade = h < WATER_Y ? Math.max(-12, h * 3) : Math.max(-12, Math.min(22, h * 1.7));
+      const p = (py * width + px) * 4;
+      image.data[p] = c[0] + shade; image.data[p+1] = c[1] + shade; image.data[p+2] = c[2] + shade; image.data[p+3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+  }
+  showRadial(show, ids = [], selectedId = 'hand') {
+    this.radialMenu.classList.toggle('hidden', !show); if (!show) return;
+    this.radialIds = ids;
+    const radius = ids.length > 12 ? 190 : 165;
+    this.radialItems.innerHTML = ids.map((id,i)=>{const a=-Math.PI/2+i/ids.length*Math.PI*2;return `<div class="radialItem ${id===selectedId?'sel':''}" data-i="${i}" style="left:${Math.cos(a)*radius}px;top:${Math.sin(a)*radius}px"><span>${icon(ITEMS[id].icon)}</span><small>${ITEMS[id].name}</small></div>`}).join('');
+    this.radialSelected = Math.max(0,ids.indexOf(selectedId)); this.radialName.textContent=ITEMS[ids[this.radialSelected]]?.name||'';
+  }
+  selectRadialByVector(x,y) {
+    if (!this.radialIds?.length || Math.hypot(x,y)<18) return this.radialIds?.[this.radialSelected];
+    let a=Math.atan2(y,x)+Math.PI/2;if(a<0)a+=Math.PI*2;
+    this.radialSelected=Math.round(a/(Math.PI*2)*this.radialIds.length)%this.radialIds.length;
+    for(const el of this.radialItems.children)el.classList.toggle('sel',+el.dataset.i===this.radialSelected);
+    const id=this.radialIds[this.radialSelected];this.radialName.textContent=ITEMS[id].name;return id;
+  }
 
   setClock(day, elevation) {
     this.dayLabel.textContent = `Tag ${day}`;
@@ -85,32 +165,24 @@ export class UI {
   }
 
   renderHotbar(hotbar, idx, inv, dura = {}) {
-    this.hotbarEl.innerHTML = hotbar
-      .map((id, i) => {
-        const def = ITEMS[id];
-        // Feste Werkzeug-Slots ohne Besitz werden ausgegraut dargestellt
-        const usable = id === 'hand' || (inv[id] || 0) > 0;
-        let count = '', bar = '';
-        if (usable) {
-          // Bogen zeigt die Pfeil-Munition oben rechts an
-          if (id === 'bogen') {
-            count = `<span class="ammo" title="Pfeile">${icon('arrow')}${inv.pfeil || 0}</span>`;
-          } else if (def.type === 'material' || def.type === 'food' || def.type === 'placeable') {
-            count = `<span class="count">${inv[id] || 0}</span>`;
-          }
-          // Haltbarkeitsbalken für Werkzeuge mit Verschleiß
-          if (def.dura) {
-            const cur = dura[id] ?? def.dura;
-            const pct = Math.max(0, Math.min(1, cur / def.dura));
-            const cls = pct > 0.5 ? '' : pct > 0.25 ? 'mid' : 'low';
-            bar = `<span class="dura ${cls}"><i style="width:${(pct * 100).toFixed(0)}%"></i></span>`;
-          }
-        }
-        return `<div class="slot ${i === idx ? 'sel' : ''} ${usable ? '' : 'empty'}" data-i="${i}" data-id="${id}" title="${def.name}">
-          <span class="key">${i + 1}</span><span class="itemIcon">${icon(def.icon)}</span>${count}${bar}
-        </div>`;
-      })
-      .join('');
+    // Nur tatsächlich benutzbare Slots anzeigen. So bleiben neue Werkzeuge und
+    // Baugegenstände auch auf Touch-Geräten direkt auswählbar (dort gibt es kein Tab-Rad).
+    const visible = hotbar.map((id, i) => ({ id, i })).filter(({ id }) => id === 'hand' || (inv[id] || 0) > 0);
+    this.hotbarEl.innerHTML = visible.map(({ id, i }) => {
+      const def = ITEMS[id];
+      const amountId = id === 'bogen' ? 'pfeil' : id;
+      const amount = inv[amountId] || 0;
+      const durability = def.dura ? Math.max(0, dura[id] ?? def.dura) : null;
+      const durabilityPct = def.dura ? Math.max(0, Math.min(1, durability / def.dura)) : 0;
+      const showAmount = id === 'bogen' || !['hand', 'tool', 'gear', 'armor'].includes(id === 'hand' ? 'hand' : def.type);
+      const amountLabel = showAmount
+        ? `<span class="count${id === 'bogen' ? ' ammoCount' : ''}" aria-label="${ITEMS[amountId]?.name || def.name}: ${amount}">${amount}</span>`
+        : '';
+      const durabilityBar = durability !== null
+        ? `<span class="dura ${durabilityPct > 0.5 ? '' : durabilityPct > 0.25 ? 'mid' : 'low'}" aria-hidden="true"><i style="width:${Math.round(durabilityPct * 100)}%"></i></span>`
+        : '';
+      return `<button class="slot ${i === idx ? 'sel' : ''}" data-i="${i}" data-id="${id}" title="${def.name}" aria-label="${def.name} auswählen"><span class="itemIcon">${icon(def.icon)}</span>${amountLabel}${durabilityBar}</button>`;
+    }).join('');
     for (const el of this.hotbarEl.querySelectorAll('.slot')) {
       el.addEventListener('pointerdown', (e) => {
         e.preventDefault();
@@ -149,6 +221,13 @@ export class UI {
       el.classList.add('out');
       setTimeout(() => el.remove(), 400);
     }, 2800);
+  }
+
+  saved(failed = false) {
+    this.saveStatus.textContent = failed ? 'Speichern fehlgeschlagen' : 'Spiel gespeichert';
+    this.saveStatus.className = `saveStatus show${failed ? ' failed' : ''}`;
+    clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => this.saveStatus.classList.remove('show'), 1800);
   }
 
   discovery(title, story, found, total) {
@@ -194,25 +273,40 @@ export class UI {
   }
 
   renderCraft(inv) {
-    this.recipeList.innerHTML = RECIPES.map((r, i) => {
+    const categories = [
+      ['tools', 'Werkzeuge'], ['build', 'Bauen'], ['gear', 'Ausrüstung'], ['bench', 'Werkbank'],
+    ];
+    const categoryOf = (r) => r.station ? 'bench'
+      : ['lagerfeuer','holzwand','wildtor','zelt','regenfaenger','floss','truhe','werkbank','holzdach'].includes(r.out) ? 'build'
+        : ['pelzmantel'].includes(r.out) ? 'gear' : 'tools';
+    $('craftTabs').innerHTML = categories.map(([id, name]) =>
+      `<button class="craftTab ${this.craftCategory === id ? 'active' : ''}" data-category="${id}">${name}</button>`).join('');
+    for (const tab of $('craftTabs').querySelectorAll('.craftTab')) tab.onclick = () => {
+      this.craftCategory = tab.dataset.category;
+      this.renderCraft(inv);
+    };
+
+    this.recipeList.innerHTML = RECIPES.map((r, i) => ({ r, i })).filter(({ r }) => categoryOf(r) === this.craftCategory).map(({ r, i }) => {
       const def = ITEMS[r.out];
       const owned = def.once && (inv[r.out] || 0) > 0;
-      let can = !owned;
+      const stationOk = !r.station || this.craftStation === r.station;
+      const levelOk = this.playerLevel >= (r.level || 1);
+      let can = !owned && stationOk && levelOk;
       const costHtml = Object.entries(r.cost)
         .map(([id, n]) => {
           const have = inv[id] || 0;
           if (have < n) can = false;
-          return `<span class="chip ${have < n ? 'miss' : ''}">${icon(ITEMS[id].icon)}${n}</span>`;
+          return `<span class="chip ${have < n ? 'miss' : ''}" title="${ITEMS[id].name}: ${have} von ${n}">${icon(ITEMS[id].icon)}${have}/${n}</span>`;
         })
         .join('');
       return `<div class="recipe ${can ? '' : 'off'}">
         <span class="ric">${icon(def.icon)}</span>
         <div class="rmid">
           <b>${def.name}</b>
-          <span class="rdesc">${r.desc}</span>
+          <span class="rdesc">${r.desc}${stationOk ? '' : ' · Werkbank benötigt'}${levelOk ? '' : ` · Level ${r.level} benötigt`}</span>
           <span class="rcost">${costHtml}</span>
         </div>
-        <button data-r="${i}" ${can ? '' : 'disabled'}>${owned ? '✓ Gebaut' : 'Craften'}</button>
+        <button data-r="${i}" ${can ? '' : 'disabled'}>${owned ? (def.type === 'tool' ? '✓ Im Werkzeuggürtel' : '✓ Gebaut') : !levelOk ? `Level ${r.level}` : 'Craften'}</button>
       </div>`;
     }).join('');
 
@@ -223,9 +317,36 @@ export class UI {
     }
 
     const entries = Object.entries(inv).filter(([, n]) => n > 0);
-    this.invGrid.innerHTML = entries.length
-      ? entries.map(([id, n]) => `<div class="invItem" title="${ITEMS[id].name}"><span>${icon(ITEMS[id].icon)}</span><b>${n}</b></div>`).join('')
-      : '<span class="empty">Noch nichts gesammelt…</span>';
+    const cap = this.capacityProvider?.() || { used: entries.length, max: 16 };
+    $('invTitle').innerHTML = `${icon('backpack')} Inventar · ${cap.used}/${cap.max} Plätze`;
+    const cells = entries.flatMap(([id,n]) => { const type=ITEMS[id].type,max=['tool','gear','armor'].includes(type)?1:type==='placeable'?10:20; const out=[]; for(let left=n;left>0;left-=max)out.push([id,Math.min(max,left)]); return out; });
+    this.invGrid.innerHTML = cells.map(([id, n]) => `<div class="invItem" title="${ITEMS[id].name}"><span>${icon(ITEMS[id].icon)}</span><b>${n}</b></div>`).join('')
+      + Array.from({ length: Math.max(0, cap.max - cap.used) }, () => '<div class="invItem empty"></div>').join('');
+  }
+
+  showStorage(show) { this.storageEl.classList.toggle('hidden', !show); }
+
+  renderStorage(title, inv, storage, capacity = null) {
+    this.storageTitle.textContent = title;
+    const stackMax = (id) => {
+      const type = ITEMS[id]?.type;
+      return ['tool','gear','armor'].includes(type) ? 1 : type === 'placeable' ? 10 : 20;
+    };
+    const stacks = (obj) => Object.entries(obj).filter(([, n]) => n > 0).flatMap(([id, n]) => {
+      const max = stackMax(id), out = [];
+      for (let left = n; left > 0; left -= max) out.push({ id, amount: Math.min(max, left) });
+      return out;
+    });
+    const render = (obj, from, emptyLabel = true) => stacks(obj).map(({ id, amount }) =>
+      `<button class="storageItem" data-id="${id}" data-from="${from}" data-amount="${amount}" title="Einen Stapel verschieben"><span>${icon(ITEMS[id]?.icon || 'backpack')}</span><em>${ITEMS[id]?.name || id}</em><b>×${amount}</b></button>`).join('') || (emptyLabel ? '<span class="empty">Leer</span>' : '');
+    const playerStacks = stacks(inv);
+    const used = capacity?.used ?? playerStacks.length, max = capacity?.max ?? 16;
+    $('storagePlayerTitle').textContent = `Rucksack · ${used}/${max} Plätze`;
+    $('storageContainerTitle').textContent = `Lager · ${stacks(storage).length} Stapel`;
+    this.storagePlayer.innerHTML = render(inv, 'player', false)
+      + Array.from({ length: Math.max(0, max - used) }, () => '<span class="storageSlotEmpty" title="Freier Rucksackplatz"></span>').join('');
+    this.storageContainer.innerHTML = render(storage, 'container');
+    for (const btn of this.storageEl.querySelectorAll('.storageItem')) btn.onclick = () => this.onStorageMove?.(btn.dataset.from, btn.dataset.id, +btn.dataset.amount);
   }
 
   // ---- Overlay (Menü / Pause / Tod) ----
@@ -250,7 +371,7 @@ export class UI {
     } else if (kind === 'dead') {
       this.ovTitle.innerHTML = `${icon('skull')} Du bist gestorben`;
       this.ovSub.textContent = `${opts.days} Tag${opts.days === 1 ? '' : 'e'} überlebt. ${opts.cause || ''}`;
-      this.btnPlay.innerHTML = `${icon('clock')} Wiederbeleben in 5:00`;
+      this.btnPlay.innerHTML = `${icon('clock')} Wiederbeleben in 0:20`;
       this.btnPlay.disabled = true;
       this.btnNew.classList.remove('hidden');
       this.btnNew.innerHTML = `${icon('sprout')} Neues Spiel`;

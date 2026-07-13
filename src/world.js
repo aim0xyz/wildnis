@@ -2,9 +2,12 @@ import * as THREE from 'three';
 import { fbm, mulberry32 } from './noise.js';
 
 export const WATER_Y = 0;
-export const WORLD_RADIUS = 320;
-const SIZE = 660;
-const SEGS = 132;
+// Die Wildnis soll sich wie ein Kontinent und nicht wie eine kleine Arena anfühlen.
+// Die Geometrie bleibt bewusst moderat unterteilt, damit die größere Karte auch
+// auf schwächeren Geräten spielbar bleibt.
+export const WORLD_RADIUS = 560;
+const SIZE = 1140;
+const SEGS = 170;
 const DAY_SECONDS = 8 * 60;
 const NIGHT_SECONDS = 3 * 60;
 
@@ -15,6 +18,12 @@ export function terrainHeight(x, z) {
   const d = Math.hypot(x, z);
   const flat = THREE.MathUtils.clamp(1 - d / 26, 0, 1);
   h = THREE.MathUtils.lerp(h, 1.6, flat * 0.9);
+  // Abgelegene Expeditionsinseln, von tiefen Fahrrinnen vom Kernland getrennt.
+  for (const [ix, iz, peak] of [[-50,250,7],[245,110,10],[-150,-260,8],[430,-330,11],[-455,-345,9]]) {
+    const id = Math.hypot(x-ix,z-iz);
+    if (id < 42) h = Math.max(h, 0.75 + (1-id/42) * peak);
+    else if (id < 62) h -= Math.sin((id-42)/20*Math.PI) * 3.2;
+  }
   return h;
 }
 
@@ -23,6 +32,16 @@ export function terrainSlope(x, z) {
   const dx = terrainHeight(x + e, z) - terrainHeight(x - e, z);
   const dz = terrainHeight(x, z + e) - terrainHeight(x, z - e);
   return Math.hypot(dx, dz) / (2 * e);
+}
+
+export function biomeAt(x, z) {
+  const h = terrainHeight(x, z);
+  if (h < 0.55) return { id: 'coast', name: 'Küste' };
+  if (h > 9) return { id: 'alpine', name: 'Hochgebirge' };
+  const climate = fbm(x * 0.012 + 610, z * 0.012 - 270);
+  if (climate < 0.34 && h < 4.5) return { id: 'marsh', name: 'Moorland' };
+  if (climate > 0.61) return { id: 'forest', name: 'Dichter Wald' };
+  return { id: 'meadow', name: 'Grasland' };
 }
 
 const C_SAND = new THREE.Color(0xdbc27f);
@@ -57,6 +76,7 @@ export class World {
     this.buildGrass();
     this.buildFlowers();
     this.buildReeds();
+    this.buildGroundDetails();
     this.buildFireflies();
     this.buildClouds();
     this.buildBirds();
@@ -95,6 +115,9 @@ export class World {
         const m = fbm(cx * 0.03 + 40, cz * 0.03 + 40);
         col.lerpColors(C_GRASS_A, C_GRASS_B, THREE.MathUtils.clamp((m - 0.3) * 2.4, 0, 1));
         if (m > 0.62) col.lerp(C_GRASS_DRY, 0.55);
+        const biome = biomeAt(cx, cz).id;
+        if (biome === 'forest') col.lerp(new THREE.Color(0x285f35), 0.38);
+        else if (biome === 'marsh') col.lerp(new THREE.Color(0x66704a), 0.48);
       }
       // leichtes Farbrauschen pro Facette
       const jitter = (fbm(cx * 0.9, cz * 0.9) - 0.5) * 0.08;
@@ -119,7 +142,7 @@ export class World {
       roughness: 0.18, metalness: 0.08, flatShading: true,
       emissive: 0x06263b, emissiveIntensity: 0.16,
     });
-    this.water = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200, 24, 24), mat);
+    this.water = new THREE.Mesh(new THREE.PlaneGeometry(1800, 1800, 24, 24), mat);
     this.water.rotation.x = -Math.PI / 2;
     this.water.position.y = WATER_Y;
     this.scene.add(this.water);
@@ -182,17 +205,33 @@ export class World {
 
   buildGrass() {
     const rand = mulberry32(4242);
-    const geo = new THREE.ConeGeometry(0.08, 0.55, 4);
-    geo.translate(0, 0.24, 0);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true });
-    const count = 2600;
+    // Ein Büschel besteht aus mehreren flachen, spitz zulaufenden Halmen statt
+    // aus einem Kegel. DoubleSide hält sie aus jedem Blickwinkel sichtbar.
+    const bladePositions = [];
+    const blades = [
+      [0,0,.82,0],[-.1,.05,.58,.9],[.11,-.03,.68,1.75],[-.04,-.1,.48,2.6],[.08,.1,.55,3.45],[-.13,-.05,.72,4.35],
+    ];
+    for (const [ox,oz,height,angle] of blades) {
+      const width=.055, rx=Math.cos(angle)*width, rz=Math.sin(angle)*width;
+      const leanX=Math.sin(angle)*height*.12, leanZ=-Math.cos(angle)*height*.12;
+      bladePositions.push(
+        ox-rx,0,oz-rz, ox+rx,0,oz+rz, ox+leanX,height,oz+leanZ,
+      );
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(bladePositions,3));
+    geo.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({ color:0xffffff, side:THREE.DoubleSide, roughness:1, flatShading:true });
+    const count = 3600;
     const mesh = new THREE.InstancedMesh(geo, mat, count);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const eul = new THREE.Euler();
     const s = new THREE.Vector3();
     const v = new THREE.Vector3();
-    const cA = new THREE.Color(0x7ccf52), cB = new THREE.Color(0x559e3c);
+    const cA = new THREE.Color(0x78b94a), cB = new THREE.Color(0x3f7f35);
+    const forestA = new THREE.Color(0x3f7434), forestB = new THREE.Color(0x264f2d);
+    const marshA = new THREE.Color(0x687847), marshB = new THREE.Color(0x44583b);
     const col = new THREE.Color();
     let placed = 0, tries = 0;
     while (placed < count && tries < count * 30) {
@@ -201,20 +240,28 @@ export class World {
       const z = (rand() - 0.5) * 2 * (WORLD_RADIUS - 5);
       const h = terrainHeight(x, z);
       if (h < 0.6 || h > 7.5 || terrainSlope(x, z) > 0.5) continue;
-      v.set(x, h, z);
-      eul.set((rand() - 0.5) * 0.3, rand() * Math.PI, (rand() - 0.5) * 0.3);
+      const biome = biomeAt(x,z).id;
+      v.set(x, h+.015, z);
+      // Leichte gemeinsame Neigung lässt Windrichtung erkennen, ohne dass die
+      // Halme wie starre, senkrechte Spitzen wirken.
+      const windLean=.05+rand()*.11;
+      eul.set(windLean, rand() * Math.PI, (rand()-.5)*.08);
       q.setFromEuler(eul);
-      const sc = 0.7 + rand() * 0.9;
-      s.set(sc, sc, sc);
+      const sc = 0.62 + rand() * 1.0;
+      s.set(sc*(.82+rand()*.35), sc, sc*(.82+rand()*.35));
       m.compose(v, q, s);
       mesh.setMatrixAt(placed, m);
-      col.lerpColors(cA, cB, rand());
+      if(biome==='forest')col.lerpColors(forestA,forestB,rand());
+      else if(biome==='marsh')col.lerpColors(marshA,marshB,rand());
+      else col.lerpColors(cA,cB,rand());
+      col.offsetHSL((rand()-.5)*.025,(rand()-.5)*.06,(rand()-.5)*.055);
       mesh.setColorAt(placed, col);
       placed++;
     }
     mesh.count = placed;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.receiveShadow = true;
     this.scene.add(mesh);
   }
 
@@ -267,6 +314,60 @@ export class World {
     mesh.count = placed;
     mesh.instanceMatrix.needsUpdate = true;
     this.scene.add(mesh);
+  }
+
+  buildGroundDetails() {
+    const rand = mulberry32(9091);
+    const matrix = new THREE.Matrix4(), pos = new THREE.Vector3(), scale = new THREE.Vector3();
+    const quat = new THREE.Quaternion(), euler = new THREE.Euler();
+
+    // Umgestürzte, bemooste Stämme machen Wälder lesbarer und weniger leer.
+    const logGeo = new THREE.CylinderGeometry(0.16, 0.23, 2.5, 7);
+    const logs = new THREE.InstancedMesh(logGeo, new THREE.MeshStandardMaterial({ color:0x59422c, roughness:1, flatShading:true }), 95);
+    let logCount = 0;
+    for (let tries=0; logCount<95 && tries<9000; tries++) {
+      const x=(rand()-.5)*520,z=(rand()-.5)*520,h=terrainHeight(x,z);
+      if (h<.7||h>6.5||terrainSlope(x,z)>.34||biomeAt(x,z).id!=='forest') continue;
+      pos.set(x,h+.18,z); euler.set(Math.PI/2+(rand()-.5)*.1,rand()*Math.PI,(rand()-.5)*.12); quat.setFromEuler(euler);
+      const s=.7+rand()*.75; scale.set(s,s,s); matrix.compose(pos,quat,scale); logs.setMatrixAt(logCount++,matrix);
+    }
+    logs.count=logCount; logs.instanceMatrix.needsUpdate=true; logs.castShadow=true; logs.receiveShadow=true; this.scene.add(logs);
+
+    // Pilze treten in kleinen Gruppen in feuchten Wald- und Moorflächen auf.
+    const stemGeo=new THREE.CylinderGeometry(.035,.055,.24,5); stemGeo.translate(0,.12,0);
+    const capGeo=new THREE.ConeGeometry(.13,.13,7); capGeo.translate(0,.29,0);
+    const stems=new THREE.InstancedMesh(stemGeo,new THREE.MeshStandardMaterial({color:0xe2d2aa,roughness:1,flatShading:true}),260);
+    const caps=new THREE.InstancedMesh(capGeo,new THREE.MeshStandardMaterial({color:0x9e3f32,roughness:1,flatShading:true}),260);
+    let mushroomCount=0;
+    for(let tries=0;mushroomCount<260&&tries<12000;tries++){
+      const x=(rand()-.5)*470,z=(rand()-.5)*470,h=terrainHeight(x,z),biome=biomeAt(x,z).id;
+      if(h<.55||h>5.5||terrainSlope(x,z)>.42||!['forest','marsh'].includes(biome))continue;
+      const s=.65+rand()*1.15;pos.set(x,h,z);euler.set(0,rand()*Math.PI*2,0);quat.setFromEuler(euler);scale.set(s,s,s);matrix.compose(pos,quat,scale);
+      stems.setMatrixAt(mushroomCount,matrix);caps.setMatrixAt(mushroomCount,matrix);mushroomCount++;
+    }
+    for(const mesh of [stems,caps]){mesh.count=mushroomCount;mesh.instanceMatrix.needsUpdate=true;mesh.castShadow=true;this.scene.add(mesh);}
+
+    // Helles Geröll markiert Gebirge schon aus der Entfernung.
+    const rockGeo=new THREE.DodecahedronGeometry(.45,0);
+    const scree=new THREE.InstancedMesh(rockGeo,new THREE.MeshStandardMaterial({color:0x777b7d,roughness:1,flatShading:true}),220);
+    let rockCount=0;
+    for(let tries=0;rockCount<220&&tries<10000;tries++){
+      const x=(rand()-.5)*600,z=(rand()-.5)*600,h=terrainHeight(x,z);
+      if(h<6.7||terrainSlope(x,z)>.82)continue;
+      pos.set(x,h+.12,z);euler.set(rand(),rand()*Math.PI,rand());quat.setFromEuler(euler);const s=.28+rand()*.9;scale.set(s, s*(.55+rand()*.55), s);matrix.compose(pos,quat,scale);scree.setMatrixAt(rockCount++,matrix);
+    }
+    scree.count=rockCount;scree.instanceMatrix.needsUpdate=true;scree.castShadow=true;scree.receiveShadow=true;this.scene.add(scree);
+
+    // Treibholz folgt dem schmalen Küstensaum und gibt Stränden mehr Geschichte.
+    const driftGeo=new THREE.CylinderGeometry(.07,.1,1.7,6);
+    const drift=new THREE.InstancedMesh(driftGeo,new THREE.MeshStandardMaterial({color:0x8d7452,roughness:1,flatShading:true}),110);
+    let driftCount=0;
+    for(let tries=0;driftCount<110&&tries<12000;tries++){
+      const x=(rand()-.5)*610,z=(rand()-.5)*610,h=terrainHeight(x,z);
+      if(h<.12||h>.55||terrainSlope(x,z)>.48)continue;
+      pos.set(x,h+.09,z);euler.set(Math.PI/2,rand()*Math.PI,(rand()-.5)*.08);quat.setFromEuler(euler);const s=.55+rand()*.9;scale.set(s,s,s);matrix.compose(pos,quat,scale);drift.setMatrixAt(driftCount++,matrix);
+    }
+    drift.count=driftCount;drift.instanceMatrix.needsUpdate=true;drift.castShadow=true;this.scene.add(drift);
   }
 
   buildFireflies() {

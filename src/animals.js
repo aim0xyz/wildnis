@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { terrainHeight, WATER_Y, WORLD_RADIUS } from './world.js';
+import { terrainHeight, biomeAt, WATER_Y, WORLD_RADIUS } from './world.js';
 import { sfx } from './sfx.js';
 
 function std(color) {
@@ -26,15 +26,15 @@ const KINDS = {
     drops: () => ({ fleisch_roh: 3, fell: 1 }),
   },
   wolf: {
-    name: 'Wolf', hp: 14, walk: 1.8, chase: 5.3, dmg: 12, hop: 0.06, hostile: true, aggroDay: 11, aggroNight: 26, disengage: 42, fireFear: true,
+    name: 'Wolf', hp: 14, walk: 1.8, chase: 5.3, dmg: 12, hop: 0.06, hostile: true, aggroDay: 11, aggroNight: 26, disengage: 42, fireFear: true, contactR: 1.55, attackR: 1.9,
     drops: () => ({ fleisch_roh: 2, fell: 2 }),
   },
   wildschwein: {
-    name: 'Wildschwein', hp: 18, walk: 1.35, chase: 5.8, dmg: 15, hop: 0.035, hostile: true, aggroDay: 7, aggroNight: 9, disengage: 30,
+    name: 'Wildschwein', hp: 18, walk: 1.35, chase: 5.8, dmg: 15, hop: 0.035, hostile: true, aggroDay: 7, aggroNight: 9, disengage: 30, contactR: 2.05, attackR: 2.35,
     drops: () => ({ fleisch_roh: 4, fell: 1 }),
   },
   baer: {
-    name: 'Bär', hp: 38, walk: 1.15, chase: 4.7, dmg: 24, hop: 0.025, hostile: true, aggroDay: 13, aggroNight: 16, disengage: 48, fireFear: true,
+    name: 'Bär', hp: 38, walk: 1.15, chase: 4.7, dmg: 24, hop: 0.025, hostile: true, aggroDay: 13, aggroNight: 16, disengage: 48, fireFear: true, contactR: 2.55, attackR: 2.85,
     drops: () => ({ fleisch_roh: 6, fell: 4 }),
   },
 };
@@ -134,7 +134,13 @@ class Animal {
   constructor(kind, x, z) {
     this.kind = kind;
     this.def = KINDS[kind];
-    this.hp = this.def.hp;
+    const biomeTier = { meadow: 1, forest: 2, coast: 3, marsh: 4, alpine: 5 }[biomeAt(x, z).id] || 1;
+    const distanceTier = Math.min(2, Math.floor(Math.hypot(x, z) / 230));
+    this.tier = Math.min(7, biomeTier + distanceTier);
+    const scale = 1 + (this.tier - 1) * 0.16;
+    this.maxHp = Math.round(this.def.hp * scale);
+    this.hp = this.maxHp;
+    this.damage = Math.round((this.def.dmg || 0) * (1 + (this.tier - 1) * 0.12));
     this.group = BUILDERS[kind]();
     this.group.position.set(x, terrainHeight(x, z), z);
     this.group.traverse((m) => { m.userData.animal = this; });
@@ -146,6 +152,11 @@ class Animal {
     this.flashT = 0;
     this.phase = Math.random() * 10;
     this.moving = false;
+    // Individuelle Pirschrichtung verhindert, dass ein ganzes Rudel synchron
+    // um ein Feuer kreist. Der Richtungswechsel erzeugt kurzes Hin-und-her.
+    this.fireProwlDir = Math.random() < .5 ? -1 : 1;
+    this.fireProwlUntil = 0;
+    this.fireStalking = false;
   }
 
   get pos() { return this.group.position; }
@@ -172,30 +183,53 @@ class Animal {
     const dp = Math.hypot(ctx.playerPos.x - p.x, ctx.playerPos.z - p.z);
     let speed = 0;
     let dirX = 0, dirZ = 0;
+    let faceX = 0, faceZ = 0;
+    this.fireStalking = false;
 
     if (this.def.hostile) {
       const threat = ctx.threat || 1;
       const aggroR = (ctx.night ? this.def.aggroNight : this.def.aggroDay) + (this.kind === 'wolf' ? Math.min(12, threat * 2) : 0);
       if (!this.aggro && dp < aggroR) {
         this.aggro = true;
-        if (dp < 30) sfx.growl();
+        if (dp < 30) this.kind === 'baer' ? sfx.bearRoar() : this.kind === 'wildschwein' ? sfx.boarSnort() : sfx.growl();
       }
       if (this.aggro && dp > this.def.disengage) this.aggro = false;
 
       if (this.aggro) {
-        // Feuer meiden
+        // Feuer meiden. Befindet sich der Spieler im Lichtkreis, laufen Wölfe
+        // und Bären am Rand langsam auf und ab, statt dort einzufrieren.
         let nearFire = null;
         for (const f of this.def.fireFear ? ctx.fires : []) {
           const df = Math.hypot(f.x - p.x, f.z - p.z);
-          if (df < 8) { nearFire = f; break; }
+          const playerAtFire = Math.hypot(f.x - ctx.playerPos.x, f.z - ctx.playerPos.z) < 7.5;
+          if ((df < 7.6 || (playerAtFire && df < 15)) && (!nearFire || df < nearFire.distance)) nearFire = { ...f, distance: df };
         }
         if (nearFire) {
-          dirX = p.x - nearFire.x; dirZ = p.z - nearFire.z;
-          speed = this.def.chase * 0.7;
+          const df = nearFire.distance || 1;
+          const radialX = (p.x - nearFire.x) / df;
+          const radialZ = (p.z - nearFire.z) / df;
+          if (now >= this.fireProwlUntil) {
+            if (Math.random() < .62) this.fireProwlDir *= -1;
+            this.fireProwlUntil = now + 2.8 + Math.random() * 4.2;
+          }
+          // Tangentiale Bewegung plus sanfte Korrektur auf einen sicheren Ring.
+          // Innerhalb des Rings dominiert die Fluchtbewegung nach außen.
+          const safeRadius = 9.6;
+          const correction = THREE.MathUtils.clamp((safeRadius - df) * .48, -.42, 1.15);
+          dirX = -radialZ * this.fireProwlDir + radialX * correction;
+          dirZ = radialX * this.fireProwlDir + radialZ * correction;
+          speed = this.def.walk * (df < 7.4 ? 1.35 : .82);
+          this.fireStalking = true;
+          // Beim seitlichen Pirschen bleibt der Blick auf Spieler und Feuer.
+          faceX = ctx.playerPos.x - p.x;
+          faceZ = ctx.playerPos.z - p.z;
         } else {
           dirX = ctx.playerPos.x - p.x;
           dirZ = ctx.playerPos.z - p.z;
           speed = this.def.chase * Math.min(1.35, 0.94 + threat * 0.06);
+          // Große Tiere stoppen mit ihrem Körper vor dem Spieler, statt mit dem
+          // Gruppenmittelpunkt bis in die Kamera zu laufen.
+          if (dp <= (this.def.contactR || 1.55)) speed = 0;
           // Spieler am Feuer? Dann Abstand halten
           for (const f of this.def.fireFear ? ctx.fires : []) {
             if (Math.hypot(f.x - ctx.playerPos.x, f.z - ctx.playerPos.z) < 6 && dp < 9) {
@@ -204,9 +238,10 @@ class Animal {
             }
           }
           this.biteCd -= dt;
-          if (dp < 2 && this.biteCd <= 0) {
+          if (dp < (this.def.attackR || 2) && this.biteCd <= 0) {
             this.biteCd = 1.2;
-            ctx.hurtPlayer(Math.round(this.def.dmg * Math.min(1.65, 0.9 + threat * 0.1)), `Ein ${this.def.name} hat dich erwischt.`);
+            const playerScale = 1 + Math.max(0, (ctx.playerLevel || 1) - this.tier) * 0.025;
+            ctx.hurtPlayer(Math.round(this.damage * playerScale * Math.min(1.55, 0.9 + threat * 0.08)), `Ein ${this.def.name} (Stufe ${this.tier}) hat dich erwischt.`);
           }
         }
       } else {
@@ -230,6 +265,23 @@ class Animal {
       }
     }
 
+    // Harte Sicherheitsauflösung auch dann, wenn das Tier bereits steht oder der
+    // Spieler selbst hineinläuft. So kann kein einzelner Frame den Bären in der
+    // First-Person-Kamera festsetzen.
+    if (this.def.hostile && this.aggro) {
+      const minDist = this.def.contactR || 1.55;
+      if (dp < minDist) {
+        let awayX = p.x - ctx.playerPos.x;
+        let awayZ = p.z - ctx.playerPos.z;
+        const awayLen = Math.hypot(awayX, awayZ);
+        if (awayLen < 0.001) { awayX = -Math.sin(ctx.playerYaw || 0); awayZ = -Math.cos(ctx.playerYaw || 0); }
+        else { awayX /= awayLen; awayZ /= awayLen; }
+        p.x = ctx.playerPos.x + awayX * minDist;
+        p.z = ctx.playerPos.z + awayZ * minDist;
+      }
+      if (speed === 0) this.group.rotation.y = Math.atan2(dirX, dirZ);
+    }
+
     this.moving = speed > 0.1;
     if (this.moving) {
       const len = Math.hypot(dirX, dirZ) || 1;
@@ -242,7 +294,7 @@ class Animal {
         let px = nx - ctx.playerPos.x;
         let pz = nz - ctx.playerPos.z;
         let playerDist = Math.hypot(px, pz);
-        const minPlayerDist = 1.55;
+        const minPlayerDist = this.def.contactR || 1.55;
         if (playerDist < minPlayerDist) {
           if (playerDist < 0.001) {
             px = -dirX || 1;
@@ -259,6 +311,10 @@ class Animal {
       const nh = terrainHeight(nx, nz);
       const blocked = ctx.animalObstacles?.some((o) => Math.hypot(nx - o.x, nz - o.z) < o.r + 0.42);
       if (blocked) {
+        if (this.fireStalking) {
+          this.fireProwlDir *= -1;
+          this.fireProwlUntil = now + 2 + Math.random() * 2;
+        }
         if (!this.def.hostile || !this.aggro) this.pickWander(now);
         speed = 0;
         this.moving = false;
@@ -268,7 +324,9 @@ class Animal {
         this.moving = false;
       } else {
         p.x = nx; p.z = nz;
-        this.group.rotation.y = Math.atan2(dirX, dirZ);
+        this.group.rotation.y = this.fireStalking
+          ? Math.atan2(faceX, faceZ)
+          : Math.atan2(dirX, dirZ);
       }
     }
 
@@ -363,12 +421,17 @@ export class Animals {
       this.group.remove(animal.group);
       this.list.splice(this.list.indexOf(animal), 1);
       this.respawnQueue.push({ kind: animal.kind, at: performance.now() / 1000 + 70 + Math.random() * 40 });
-      return { killed: true, drops, name: animal.def.name };
+      const baseXP = { hase: 8, hirsch: 16, wolf: 28, wildschwein: 34, baer: 60 }[animal.kind] || 12;
+      return { killed: true, drops, name: animal.def.name, xp: Math.round(baseXP * (1 + (animal.tier - 1) * .18)), tier: animal.tier };
     }
-    return { killed: false, drops: null, name: animal.def.name, hp: animal.hp, maxHp: animal.def.hp };
+    return { killed: false, drops: null, name: animal.def.name, hp: animal.hp, maxHp: animal.maxHp, tier: animal.tier };
   }
 
   update(dt, ctx) {
+    // Wildschweine verteidigen ihre Rotte gemeinsam.
+    for (const a of this.list) if (a.kind === 'wildschwein' && a.aggro) {
+      for (const mate of this.list) if (mate.kind === 'wildschwein' && Math.hypot(mate.pos.x-a.pos.x,mate.pos.z-a.pos.z)<11) mate.aggro=true;
+    }
     for (const a of this.list) a.update(dt, ctx);
     const now = performance.now() / 1000;
     for (let i = this.respawnQueue.length - 1; i >= 0; i--) {

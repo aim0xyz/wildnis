@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { terrainHeight, terrainSlope, WORLD_RADIUS } from './world.js';
+import { terrainHeight, terrainSlope, biomeAt, WORLD_RADIUS } from './world.js';
 import { fbm, mulberry32 } from './noise.js';
 import { toolDamage } from './items.js';
 
@@ -44,15 +44,15 @@ export class Resources {
 
     const forest = (x, z) => fbm(x * 0.02 + 300, z * 0.02 + 300) > 0.42;
 
-    for (let i = 0; i < 285; i++) {
-      const p = tryPlace(3, 0.6, 8.5, 0.55, forest);
+    for (let i = 0; i < 720; i++) {
+      const p = tryPlace(2.7, 0.6, 8.5, 0.55, forest);
       if (p) this.addResource('tree', p, rand);
     }
-    for (let i = 0; i < 105; i++) {
+    for (let i = 0; i < 290; i++) {
       const p = tryPlace(3.5, 0.5, 11, 0.9);
       if (p) this.addResource('rock', p, rand);
     }
-    for (let i = 0; i < 82; i++) {
+    for (let i = 0; i < 175; i++) {
       const p = tryPlace(4, 0.6, 6.5, 0.45);
       if (p) this.addResource('bush', p, rand);
     }
@@ -65,6 +65,10 @@ export class Resources {
     else { group = this.buildBush(rand); hp = 1; r = 0; }
 
     group.position.set(p.x, p.h, p.z);
+    const biome = biomeAt(p.x, p.z).id;
+    if (kind === 'tree' && biome === 'forest') group.scale.multiplyScalar(1.15);
+    if (kind === 'bush' && biome === 'marsh') group.scale.set(1.15, 0.72, 1.15);
+    if (kind === 'rock' && biome === 'alpine') group.scale.multiplyScalar(1.12);
     group.rotation.y = rand() * Math.PI * 2;
     this.group.add(group);
 
@@ -174,14 +178,15 @@ export class Resources {
     res.shakeT = 0.3;
 
     let hint = null;
-    if (res.kind === 'rock' && toolId !== 'spitzhacke') hint = 'Mit einer Spitzhacke geht das schneller!';
-    if (res.kind === 'tree' && toolId !== 'axt') hint = 'Mit einer Axt geht das schneller!';
+    if (res.kind === 'rock' && !['spitzhacke','metallhacke'].includes(toolId)) hint = 'Mit einer Spitzhacke geht das schneller!';
+    if (res.kind === 'tree' && !['axt','metallaxt'].includes(toolId)) hint = 'Mit einer Axt geht das schneller!';
 
     if (res.hp <= 0) {
       res.alive = false;
       res.group.visible = false;
       res.respawnAt = performance.now() / 1000 + 80 + Math.random() * 50;
-      const drops = res.kind === 'tree' ? { holz: 4 } : { stein: 3 };
+      const highOre = res.kind === 'rock' && terrainHeight(res.x, res.z) > 5.5;
+      const drops = res.kind === 'tree' ? { holz: 4 } : { stein: 3, ...(highOre && Math.random() < 0.72 ? { eisenerz: 1 + (Math.random() < 0.25 ? 1 : 0) } : {}) };
       return { destroyed: true, drops, kind: res.kind, hint: null };
     }
     return { destroyed: false, drops: null, kind: res.kind, hint };

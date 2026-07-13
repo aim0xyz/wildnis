@@ -68,7 +68,7 @@ function softNoise(dur, vol, filterType, filterFreq, q = 0.7) {
 }
 
 // ---- Ambient-Klanglandschaft (Regen als Dauerschleife) ----
-let amb = null; // { master, rainGain, rainDropGain }
+let amb = null; // { master, rainGain, rainDropGain, windGain, windFilter }
 
 function longNoise(c, seconds = 2) {
   const len = Math.floor(c.sampleRate * seconds);
@@ -111,7 +111,15 @@ function ensureAmbient() {
   drops.connect(dropFilter).connect(rainDropGain).connect(master);
   drops.start(c.currentTime + 0.17);
 
-  amb = { master, rainGain, rainDropGain };
+  // Wind: tiefer, breitbandiger Luftstrom; Filter und Pegel folgen den Böen.
+  const wind = c.createBufferSource();
+  wind.buffer = longNoise(c, 3.7); wind.loop = true;
+  const windFilter = c.createBiquadFilter();
+  windFilter.type = 'bandpass'; windFilter.frequency.value = 520; windFilter.Q.value = 0.32;
+  const windGain = c.createGain(); windGain.gain.value = 0.0001;
+  wind.connect(windFilter).connect(windGain).connect(master); wind.start(c.currentTime + 0.08);
+
+  amb = { master, rainGain, rainDropGain, windGain, windFilter };
   return amb;
 }
 
@@ -127,6 +135,12 @@ export const sfx = {
     // Gesamtpegel bleibt nahezu gleich, wird aber auf Körper und Tropfen verteilt.
     amb.rainGain.gain.setTargetAtTime(Math.max(0.0001, v * 0.78), c.currentTime, 0.6);
     amb.rainDropGain.gain.setTargetAtTime(Math.max(0.0001, v * 0.24), c.currentTime, 0.45);
+  },
+  setWind(v) {
+    if (!amb) return;
+    const c = ac(), force = Math.max(0, Math.min(1.25, v));
+    amb.windGain.gain.setTargetAtTime(Math.max(0.0001, force * 0.045), c.currentTime, 0.7);
+    amb.windFilter.frequency.setTargetAtTime(360 + force * 620, c.currentTime, 0.8);
   },
 
   // Untergrundabhängige, bewusst dezente Schritte.
@@ -168,11 +182,15 @@ export const sfx = {
   // Kurzes Vogelzwitschern (ein paar schnelle, gleitende Sinustöne)
   birdChirp() {
     if (sfx.muted) return;
-    const base = 2600 + Math.random() * 1400;
+    const c = ac(), start = c.currentTime, base = 1850 + Math.random() * 900;
     const notes = 2 + Math.floor(Math.random() * 3);
-    for (let i = 0; i < notes; i++) {
-      const f = base * (0.9 + Math.random() * 0.5);
-      setTimeout(() => tone(f, 0.07 + Math.random() * 0.05, 'sine', 0.05, f * (1.15 + Math.random() * 0.25)), i * (70 + Math.random() * 60));
+    for (let i=0;i<notes;i++) {
+      const at=start+i*(0.11+Math.random()*0.055), dur=0.095+Math.random()*0.055;
+      const o=c.createOscillator(), g=c.createGain(); o.type='sine';
+      const from=base*(0.82+Math.random()*.2), peak=base*(1.15+Math.random()*.32);
+      o.frequency.setValueAtTime(from,at);o.frequency.exponentialRampToValueAtTime(peak,at+dur*.42);o.frequency.exponentialRampToValueAtTime(from*.9,at+dur);
+      g.gain.setValueAtTime(.0001,at);g.gain.exponentialRampToValueAtTime(.027,at+.018);g.gain.exponentialRampToValueAtTime(.0001,at+dur);
+      o.connect(g).connect(c.destination);o.start(at);o.stop(at+dur+.02);
     }
   },
 
@@ -234,12 +252,15 @@ export const sfx = {
   stone() { noiseBurst(0.06, 0.5, 2400); tone(220, 0.05, 'square', 0.25, 150); },
   pickup() { tone(660, 0.07, 'sine', 0.3, 990); },
   eat() { tone(300, 0.06, 'triangle', 0.35, 200); setTimeout(() => tone(260, 0.06, 'triangle', 0.3, 180), 90); },
-  craft() { tone(440, 0.08, 'square', 0.2); setTimeout(() => tone(660, 0.1, 'square', 0.2), 100); },
+  // UI-Bestätigung bewusst leise halten, damit wiederholtes Craften nicht hervorsticht.
+  craft() { tone(440, 0.08, 'square', 0.07); setTimeout(() => tone(660, 0.1, 'square', 0.065), 100); },
   place() { tone(180, 0.12, 'triangle', 0.4, 110); },
   attack() { noiseBurst(0.05, 0.2, 1400); },
   hit() { noiseBurst(0.07, 0.4, 700); tone(160, 0.08, 'triangle', 0.4, 90); },
   hurt() { tone(150, 0.22, 'sawtooth', 0.35, 80); },
   growl() { tone(85, 0.5, 'sawtooth', 0.28, 55); },
+  boarSnort() { softNoise(0.28, 0.16, 'lowpass', 480, 0.8); setTimeout(() => tone(115, .16, 'triangle', .08, 75), 45); },
+  bearRoar() { softNoise(0.7, 0.24, 'lowpass', 360, 1.1); tone(72, .75, 'sawtooth', .16, 43); },
   cook() { noiseBurst(0.35, 0.18, 500); },
   sleep() { tone(520, 0.4, 'sine', 0.22, 260); },
   die() { tone(220, 0.9, 'sawtooth', 0.3, 50); },

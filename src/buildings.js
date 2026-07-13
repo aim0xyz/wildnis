@@ -13,6 +13,9 @@ const DEFS = {
   tent: { name: 'Zelt', r: 1.5, spawn: true },
   raincatcher: { name: 'Regenfänger', r: 1.15 },
   raft: { name: 'Floß', r: 1.45, blocksPlayer: false, waterOnly: true },
+  chest: { name: 'Holztruhe', r: 0.75 },
+  workbench: { name: 'Werkbank', r: 1.15 },
+  roof: { name: 'Holzdach', r: 2.2, blocksPlayer: false, shelter: true },
 };
 
 function buildCampfire() {
@@ -127,20 +130,45 @@ function buildTent() {
     pole.rotation.z = rz;
     g.add(pole);
   }
+  // Abspannseile und Heringe geben dem Zelt eine glaubwürdige Silhouette.
+  for (const x of [-1, 1]) {
+    const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 1.7, 4), std(0x9f8a62));
+    rope.position.set(x * 1.25, 0.72, 0); rope.rotation.z = x * -0.78; g.add(rope);
+    const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 0.32, 5), std(0x54402b));
+    peg.position.set(x * 1.84, 0.12, 0); peg.rotation.z = x * .22; g.add(peg);
+  }
   return g;
 }
 
 function buildRaincatcher() {
   const g = new THREE.Group();
+  const wood = std(0x68472d);
   for (const sx of [-0.85, 0.85]) for (const sz of [-0.65, 0.65]) {
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 1.25, 5), std(0x68472d));
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 1.25, 5), wood);
     leg.position.set(sx, 0.62, sz); leg.castShadow = true; g.add(leg);
   }
-  const basin = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 0.62, 0.38, 8, 1, true), std(0x6f8b73));
-  basin.position.y = 1.18; basin.rotation.y = Math.PI / 8; g.add(basin);
-  const water = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 0.88, 0.035, 8), new THREE.MeshStandardMaterial({ color: 0x4ba7cf, transparent: true, opacity: 0.72 }));
-  water.position.y = 1.31; water.visible = false; g.add(water);
+  // Querstreben geben dem Gestell Gewicht und erklären, wie die Schale gehalten wird.
+  for (const z of [-0.65, 0.65]) {
+    const brace = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 1.75, 5), wood);
+    brace.rotation.z = Math.PI / 2; brace.position.set(0, 0.7, z); g.add(brace);
+  }
+
+  const basinMat = std(0x617565);
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 0.62, 0.42, 12, 1, true), basinMat);
+  basin.position.y = 1.18; basin.rotation.y = Math.PI / 12; basin.castShadow = true; g.add(basin);
+  const bottom = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 0.62, 0.1, 12), std(0x526356));
+  bottom.position.y = 1.0; bottom.rotation.y = Math.PI / 12; bottom.castShadow = true; g.add(bottom);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(1.14, 0.065, 5, 12), std(0x829382));
+  rim.rotation.x = Math.PI / 2; rim.rotation.z = Math.PI / 12; rim.position.y = 1.4; g.add(rim);
+
+  const water = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.94, 0.94, 0.045, 24),
+    new THREE.MeshStandardMaterial({ color: 0x328fbd, roughness: 0.22, metalness: 0.05, transparent: true, opacity: 0.82 })
+  );
+  water.position.y = 1.08; water.visible = false; g.add(water);
   g.userData.waterSurface = water;
+  g.userData.waterMinY = 1.08;
+  g.userData.waterMaxY = 1.34;
   return g;
 }
 
@@ -165,7 +193,41 @@ function buildRaft() {
   return g;
 }
 
-const BUILDERS = { campfire: buildCampfire, torch: buildTorch, wall: buildWall, gate: buildGate, tent: buildTent, raincatcher: buildRaincatcher, raft: buildRaft };
+function buildChest() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.72, 0.8), std(0x76502e)); body.position.y = 0.36; g.add(body);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(1.34, 0.18, 0.88), std(0x8c6238)); lid.position.y = 0.81; g.add(lid);
+  const lock = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.24, 0.08), std(0xb08b45)); lock.position.set(0, 0.61, 0.45); g.add(lock);
+  const metal = std(0x504f4b);
+  for (const x of [-.46,.46]) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(.09,.82,.86), metal); band.position.set(x,.44,0); g.add(band);
+  }
+  for (const x of [-.67,.67]) for (const z of [-.43,.43]) {
+    const corner = new THREE.Mesh(new THREE.BoxGeometry(.08,.18,.08), metal); corner.position.set(x,.14,z); g.add(corner);
+  }
+  const handle = new THREE.Mesh(new THREE.TorusGeometry(.18,.025,5,9,Math.PI),metal);
+  handle.rotation.x=Math.PI/2;handle.position.set(0,.52,-.45);g.add(handle);
+  return g;
+}
+function buildWorkbench() {
+  const g = new THREE.Group();
+  const top = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.2, 1), std(0x80572f)); top.position.y = 1.05; g.add(top);
+  for (const x of [-0.85, 0.85]) for (const z of [-0.32, 0.32]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1, 0.16), std(0x5c3d24)); leg.position.set(x, 0.5, z); g.add(leg); }
+  const vice = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.32, 0.35), std(0x777d84)); vice.position.set(0.65, 1.28, 0); g.add(vice);
+  const lowerShelf = new THREE.Mesh(new THREE.BoxGeometry(1.85,.12,.72),std(0x684526));lowerShelf.position.y=.38;g.add(lowerShelf);
+  const tool = new THREE.Mesh(new THREE.CylinderGeometry(.035,.045,.75,5),std(0x59402a));tool.rotation.z=Math.PI/2;tool.position.set(-.35,1.22,.12);g.add(tool);
+  const toolHead = new THREE.Mesh(new THREE.BoxGeometry(.28,.14,.16),std(0x6f7478));toolHead.position.set(.02,1.22,.12);g.add(toolHead);
+  for(let i=0;i<3;i++){const plank=new THREE.Mesh(new THREE.BoxGeometry(.95,.1,.18),std(0x916238));plank.position.set(-.2+i*.08,.5+i*.1,0);plank.rotation.y=.18;g.add(plank);}
+  return g;
+}
+function buildRoof() {
+  const g = new THREE.Group();
+  for (const x of [-2, 2]) for (const z of [-1.5, 1.5]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.11, 2.5, 5), std(0x624227)); post.position.set(x, 1.25, z); g.add(post); }
+  for (const s of [-1, 1]) { const panel = new THREE.Mesh(new THREE.BoxGeometry(4.7, 0.14, 2), std(0x85643a)); panel.position.set(0, 2.62, s * 0.75); panel.rotation.x = s * 0.28; g.add(panel); }
+  return g;
+}
+
+const BUILDERS = { campfire: buildCampfire, torch: buildTorch, wall: buildWall, gate: buildGate, tent: buildTent, raincatcher: buildRaincatcher, raft: buildRaft, chest: buildChest, workbench: buildWorkbench, roof: buildRoof };
 
 // Lagerfeuer-Brennstoff (in Sekunden Brenndauer)
 const CAMPFIRE_MAX_FUEL = 180;   // maximaler Vorrat
@@ -326,6 +388,11 @@ export class Buildings {
     this.lights = this.lights.filter((l) => l.building !== building);
   }
 
+  clear() {
+    for (const building of [...this.placed]) this.removeBuilding(building);
+    this.setGhostType(null);
+  }
+
   isInsideBuilding(point, building) {
     const def = DEFS[building.type];
     const dx = point.x - building.x, dz = point.z - building.z;
@@ -344,6 +411,7 @@ export class Buildings {
       tent: { holz: 5, fell: 1 },
       raincatcher: { holz: 3, stein: 1 },
       raft: { holz: 8 },
+      chest: { holz: 4 }, workbench: { holz: 6, stein: 3 }, roof: { holz: 3 },
     };
     this.removeBuilding(building);
     return refunds[building.type] || {};
@@ -378,6 +446,7 @@ export class Buildings {
     this.group.add(g);
     const building = { type, x, z, rot, group: g, open: false };
     if (type === 'raft') { building.speed = 0; building.turnSpeed = 0; }
+    if (type === 'chest' || type === 'raft') building.storage = {};
     if (type === 'raincatcher') { building.water = 0; building.maxWater = 100; }
     g.userData.building = building;
     this.placed.push(building);
@@ -456,6 +525,11 @@ export class Buildings {
     return taken;
   }
 
+  isSheltered(pos) {
+    return this.placed.some((b) => (b.type === 'roof' && Math.hypot(b.x - pos.x, b.z - pos.z) < 2.25)
+      || (b.type === 'tent' && Math.hypot(b.x - pos.x, b.z - pos.z) < 1.45));
+  }
+
   update(dt, wind = null) {
     const t = performance.now() * 0.001;
     for (const b of this.placed) {
@@ -467,8 +541,12 @@ export class Buildings {
       const flames = b.group.userData.flames;
       if (b.type === 'raincatcher' && b.group.userData.waterSurface) {
         const surface = b.group.userData.waterSurface;
+        const fill = Math.min(1, b.water / b.maxWater);
         surface.visible = b.water > 1;
-        surface.scale.setScalar(0.65 + Math.min(1, b.water / b.maxWater) * 0.35);
+        // Der Pegel steigt innerhalb der konischen Schale; nur die Breite wächst mit.
+        surface.position.y = THREE.MathUtils.lerp(b.group.userData.waterMinY, b.group.userData.waterMaxY, fill);
+        const width = THREE.MathUtils.lerp(0.72, 1, fill);
+        surface.scale.set(width * (1 + Math.sin(t * 1.8 + b.x) * 0.006), 1, width);
       }
       if (flames) {
         const lit = b.lit !== false;
@@ -497,10 +575,12 @@ export class Buildings {
   }
 
   serialize() {
-    return this.placed.map((b) => ({ type: b.type, x: b.x, z: b.z, rot: b.rot, open: !!b.open, fuel: b.fuel, water: b.water }));
+    // Zeitlich begrenzte Expeditionskisten gehören nicht dauerhaft zum Spielstand.
+    return this.placed.filter((b) => !b.expeditionEvent).map((b) => ({ type: b.type, x: b.x, z: b.z, rot: b.rot, open: !!b.open, fuel: b.fuel, water: b.water, storage: b.storage }));
   }
 
   load(list) {
+    this.clear();
     for (const b of list || []) {
       this.place(b.type, b.x, b.z, b.rot);
       const placed = this.placed[this.placed.length - 1];
@@ -510,6 +590,7 @@ export class Buildings {
         placed.lit = placed.fuel > 0;
       }
       if (b.type === 'raincatcher' && typeof b.water === 'number') placed.water = Math.max(0, Math.min(placed.maxWater, b.water));
+      if ((b.type === 'chest' || b.type === 'raft') && b.storage) placed.storage = { ...b.storage };
     }
   }
 }

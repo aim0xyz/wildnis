@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { World, terrainHeight, terrainSlope, WATER_Y, WORLD_RADIUS } from './world.js';
+import { World, terrainHeight, terrainSlope, biomeAt, WATER_Y, WORLD_RADIUS } from './world.js';
 import { Resources } from './resources.js';
 import { Buildings } from './buildings.js';
 import { Animals } from './animals.js';
@@ -15,11 +15,13 @@ import { Aquatics } from './aquatics.js';
 import { Landmarks, LANDMARK_COUNT } from './landmarks.js';
 
 const SAVE_KEY = 'wildnis_save_v1';
-const RESPAWN_WAIT = 5 * 60 * 1000;
+const RESPAWN_WAIT = 20 * 1000;
+const XP_LEVELS = [0, 100, 250, 450, 700, 1000, 1400];
+const REGION_LEVELS = { meadow: 1, forest: 2, coast: 3, marsh: 4, alpine: 5 };
 const TUTORIAL = [
   { text: 'Sammle mindestens 3 Holz.', icon: 'wood', done: () => (game.inv.holz || 0) >= 3 || (game.inv.axt || 0) > 0 || buildings.placed.length > 0 },
   { text: 'Stelle im Crafting-Menü eine Axt her.', icon: 'axe', done: () => (game.inv.axt || 0) > 0 || buildings.placed.length > 0 },
-  { text: 'Baue ein Lagerfeuer.', icon: 'fire', done: () => buildings.placed.some((b) => ['campfire', 'wall', 'gate'].includes(b.type)) },
+  { text: 'Baue ein Lagerfeuer.', icon: 'fire', done: () => buildings.placed.some((b) => b.type === 'campfire') },
   { text: 'Stelle eine Holzwand her und platziere sie.', icon: 'wall', done: () => buildings.placed.some((b) => ['wall', 'gate'].includes(b.type)) },
   { text: 'Crafte ein Wildtor und ersetze damit eine Wand.', icon: 'gate', done: () => buildings.placed.some((b) => b.type === 'gate') },
   { text: 'Stelle einen Bauhammer zum Abbauen her.', icon: 'hammer', done: () => (game.inv.hammer || 0) > 0 },
@@ -81,8 +83,41 @@ const game = {
   nightAnnouncedDay: 0,
   thirstWarning: false,
   coldWarning: false,
+  hungerWarning: false,
   boat: null,
+  storage: null,
+  fishing: false,
+  eventTimer: 70,
+  bottleWater: 0,
+  expeditionEvent: null,
+  hintsShown: {},
+  xp: 0,
+  level: 1,
+  craftedOnce: [],
+  visitedBiomes: ['meadow'],
+  lastRewardDay: 1,
 };
+
+function levelForXP(xp) {
+  let level = 1;
+  while (level < XP_LEVELS.length && xp >= XP_LEVELS[level]) level++;
+  return level;
+}
+
+function addXP(amount, reason = '') {
+  if (!amount) return;
+  const oldLevel = game.level;
+  game.xp += amount;
+  game.level = levelForXP(game.xp);
+  const current = XP_LEVELS[game.level - 1] ?? XP_LEVELS.at(-1);
+  const next = XP_LEVELS[game.level] ?? current;
+  ui.setLevel(game.level, game.xp, current, next);
+  if (game.level > oldLevel) {
+    ui.toast(`LEVEL ${game.level} — neue Möglichkeiten freigeschaltet!`);
+    sfx.craft();
+    if (game.state === 'craft') ui.renderCraft(game.inv);
+  } else if (reason) ui.toast(`+${amount} XP · ${reason}`);
+}
 
 buildings.onTentPlaced = (x, z) => {
   game.spawn = { x, z: z + 2.2 };
@@ -111,19 +146,61 @@ player.onDamage = (n, cause) => {
 };
 
 // ---------- Inventar ----------
+function stackSize(id) {
+  const type = ITEMS[id]?.type;
+  return ['tool', 'gear', 'armor'].includes(type) ? 1 : type === 'placeable' ? 10 : 20;
+}
+function inventoryCapacity(inv = game.inv) { return (inv.grosser_rucksack || 0) > 0 ? 28 : 16; }
+function inventoryUsed(inv = game.inv) {
+  return Object.entries(inv).reduce((sum, [id, n]) => {
+    // Werkzeuge liegen in den festen Slots des Werkzeuggürtels und blockieren
+    // deshalb keinen zusätzlichen Platz im eigentlichen Rucksack.
+    if (ITEMS[id]?.type === 'tool') return sum;
+    return sum + (n > 0 ? Math.ceil(n / stackSize(id)) : 0);
+  }, 0);
+}
+function capacityInfo() { return { used: inventoryUsed(), max: inventoryCapacity() }; }
+ui.capacityProvider = capacityInfo;
+
 function addItem(id, n = 1, silent = false) {
-  game.inv[id] = (game.inv[id] || 0) + n;
+  let accepted = 0;
+  while (accepted < n) {
+    const next = (game.inv[id] || 0) + 1;
+    const before = game.inv[id] || 0;
+    game.inv[id] = next;
+    if (inventoryUsed() > inventoryCapacity()) { game.inv[id] = before; break; }
+    accepted++;
+  }
+  if (!accepted) { if (!silent) ui.toast('Rucksack voll!', 'hint'); return 0; }
   if (!silent) {
-    ui.toast(`+${n} ${ITEMS[id].name}`);
+    ui.toast(`+${accepted} ${ITEMS[id].name}`);
     sfx.pickup();
   }
   refreshInv();
   updateTutorial();
+  showUnlockHint(id);
+  return accepted;
+}
+
+function showUnlockHint(id) {
+  if (game.hintsShown[id]) return;
+  const hints = {
+    lagerfeuer: 'Neu: Wähle das Lagerfeuer unten aus und platziere es mit Linksklick.',
+    holzwand: 'Bauteile kannst du vor dem Platzieren mit R drehen.',
+    werkbank: 'Werkbank freigeschaltet: Stelle sie auf und benutze sie mit E.',
+    floss: 'Floß freigeschaltet: Auf Wasser platzieren, mit E einsteigen.',
+    feldflasche: 'Feldflasche: Mit E am Regenfänger füllen, mit V trinken.',
+    truhe: 'Holztruhe: Mit E öffnen und Vorräte durch Antippen verschieben.',
+  };
+  if (!hints[id] || game.state !== 'playing') return;
+  game.hintsShown[id] = true;
+  setTimeout(() => game.state === 'playing' && ui.toast(hints[id], 'hint'), 500);
 }
 
 function updateTutorial(silent = false) {
   const before = game.tutorialStage;
   while (game.tutorialStage < TUTORIAL.length && TUTORIAL[game.tutorialStage].done()) game.tutorialStage++;
+  if (!silent && game.tutorialStage > before) addXP((game.tutorialStage - before) * 25, 'Aufgabe abgeschlossen');
   if (!silent && game.tutorialStage > before && game.state === 'playing') ui.toast('Aufgabe abgeschlossen!');
   if (game.tutorialStage >= TUTORIAL.length) {
     const found = game.discoveries.length;
@@ -141,6 +218,8 @@ function discoverLandmark(landmark) {
   game.discoveries.push(landmark.id);
   for (const [id, n] of Object.entries(landmark.reward)) addItem(id, n, true);
   ui.discovery(landmark.name, landmark.story, game.discoveries.length, LANDMARK_COUNT);
+  addXP(90, 'Ort entdeckt');
+  if (game.discoveries.length === 1) setTimeout(() => ui.toast('Neu: Mit K öffnest du deine Erkundungskarte.', 'hint'), 1800);
   if (game.discoveries.length === LANDMARK_COUNT) {
     addItem('holzwand', 4, true);
     addItem('wildtor', 1, true);
@@ -182,6 +261,9 @@ function refreshInv() {
   game.hotIdx = newIdx >= 0 && slotUsable(selId, game.inv) ? newIdx : 0;
   ui.renderHotbar(game.hotbar, game.hotIdx, game.inv, game.dura);
   ui.setMaterials(game.inv);
+  const current = XP_LEVELS[game.level - 1] ?? XP_LEVELS.at(-1);
+  const next = XP_LEVELS[game.level] ?? current;
+  ui.setLevel(game.level, game.xp, current, next);
   if (game.state === 'craft') ui.renderCraft(game.inv);
   syncSelection();
 }
@@ -225,7 +307,7 @@ scene.add(torchLight);
 
 // true, solange eine brennende Fackel getragen wird (für Licht & Wolfsabwehr)
 function torchHeld() {
-  return selected() === 'fackel' && (game.inv.fackel || 0) > 0;
+  return ['fackel','laterne'].includes(selected()) && (game.inv[selected()] || 0) > 0;
 }
 
 // Atmosphäre: Regenpegel setzen, gelegentlich Vögel zwitschern lassen
@@ -233,6 +315,7 @@ let birdTimer = 5;
 function updateAmbient(dt) {
   const rain = world.rainIntensity;
   sfx.setRain(rain * 0.09);
+  sfx.setWind(Math.hypot(world.wind.x, world.wind.z));
 
   birdTimer -= dt;
   if (birdTimer <= 0) {
@@ -268,19 +351,20 @@ function updateFootsteps(dt, movement) {
 
 function updateTorch(dt) {
   if (!torchHeld()) return;
+  const lightId = selected();
   // Fackel brennt zeitbasiert herunter
-  game.dura.fackel = (game.dura.fackel ?? ITEMS.fackel.dura) - dt;
-  if (game.dura.fackel <= 0) {
-    delete game.dura.fackel;
-    removeItem('fackel', 1);
-    ui.toast('Deine Fackel ist heruntergebrannt!', 'hint');
+  game.dura[lightId] = (game.dura[lightId] ?? ITEMS[lightId].dura) - dt;
+  if (game.dura[lightId] <= 0) {
+    delete game.dura[lightId];
+    removeItem(lightId, 1);
+    ui.toast(`${ITEMS[lightId].name} ist erloschen!`, 'hint');
     sfx.hurt();
     return;
   }
   torchLight.visible = true;
   torchLight.position.set(camera.position.x, camera.position.y + 0.1, camera.position.z);
-  torchLight.intensity = 2.0 * (0.85 + Math.sin(performance.now() * 0.012) * 0.12 + Math.random() * 0.06);
-  ui.updateDuraBar('fackel', game.dura.fackel / ITEMS.fackel.dura);
+  torchLight.intensity = (lightId === 'laterne' ? 3 : 2) * (0.85 + Math.sin(performance.now() * 0.012) * 0.12 + Math.random() * 0.06);
+  ui.updateDuraBar(lightId, game.dura[lightId] / ITEMS[lightId].dura);
 }
 
 function raycastTargets(range) {
@@ -321,7 +405,23 @@ function primaryAction() {
   if (def.type === 'food') return eatItem(id);
   if (def.type === 'placeable') return placeSelected(id);
   if (id === 'bogen') return shootBow();
+  if (id === 'angel') return startFishing();
   attack(id);
+}
+
+function startFishing() {
+  if (game.fishing) return;
+  camera.getWorldDirection(spearDirection);
+  const target = player.pos.clone().addScaledVector(spearDirection.setY(0).normalize(), 8);
+  if (terrainHeight(target.x, target.z) > WATER_Y - 1.1) return ui.toast('Wirf die Angel in tiefes Wasser.', 'hint');
+  game.fishing = true;
+  ui.toast('Angel ausgeworfen…');
+  setTimeout(() => {
+    if (!game.fishing || game.state !== 'playing' || selected() !== 'angel') { game.fishing = false; return; }
+    game.fishing = false;
+    if (Math.random() < 0.72) { addItem('fleisch_roh', 1); ui.toast('Ein Fisch hat angebissen!'); sfx.pickup(); useDurability('angel'); }
+    else ui.toast('Der Fisch ist entkommen.', 'hint');
+  }, 2600 + Math.random() * 2200);
 }
 
 function eatItem(id) {
@@ -389,6 +489,7 @@ function attack(toolId) {
     const result = animals.hit(animal, dmg, dir);
     if (result.killed) {
       ui.toast(`${result.name} erlegt!`);
+      addXP(result.xp || 15, `${result.name} erlegt`);
       for (const [id, n] of Object.entries(result.drops)) addItem(id, n);
     }
     useDurability(toolId);
@@ -462,6 +563,7 @@ function updateFlyingArrows(dt) {
       const result = animals.hit(animal, toolIdDamage('bogen'), spear.dir);
       if (result.killed) {
         ui.toast(`${result.name} erlegt!`);
+        addXP(result.xp || 15, `${result.name} erlegt`);
         for (const [id, n] of Object.entries(result.drops)) addItem(id, n);
       }
       scene.remove(spear.group);
@@ -481,6 +583,7 @@ function updateFlyingArrows(dt) {
 
 function toolIdDamage(toolId) {
   if (toolId === 'bogen') return 5;
+  if (toolId === 'metallaxt' || toolId === 'metallhacke') return 3;
   if (toolId === 'axt' || toolId === 'spitzhacke') return 2;
   return 1;
 }
@@ -504,6 +607,13 @@ function interact() {
     enterRaft(raft);
     return;
   }
+  const chest = aimedBuildingOfType('chest', 3.5, aimedBuilding);
+  if (chest) {
+    if (chest.expeditionEvent) completeExpeditionEvent(chest);
+    return openStorage(chest, chest.eventTitle || 'Holztruhe');
+  }
+  const bench = aimedBuildingOfType('workbench', 3.8, aimedBuilding);
+  if (bench) return openCraft('workbench');
   const fire = aimedBuildingOfType('campfire', 3.5, aimedBuilding);
   if (fire) {
     // Erloschenes Feuer: mit Holz wieder anzünden
@@ -523,13 +633,21 @@ function interact() {
     if ((game.inv.fleisch_roh || 0) > 0) {
       removeItem('fleisch_roh', 1);
       addItem('fleisch', 1, true);
-      ui.toast('Fleisch gebraten!');
+      const rawLeft = game.inv.fleisch_roh || 0;
+      ui.toast(rawLeft > 0 ? `Fleisch gebraten · noch ${rawLeft} roh` : 'Letztes Fleisch gebraten · kein Holz nachgelegt.');
+      if (rawLeft === 0) fire.cookingFinishedAt = performance.now();
       sfx.cook();
       refreshInv();
       return;
     }
     // … sonst mit Holz nachlegen
     if ((game.inv.holz || 0) > 0 && fire.fuel < fire.maxFuel) {
+      // Schnelles Weiterdrücken nach dem letzten Fleisch darf nicht ungewollt
+      // direkt ein Holzstück verbrauchen.
+      if (fire.cookingFinishedAt && performance.now() - fire.cookingFinishedAt < 1600) {
+        ui.toast('Kein rohes Fleisch mehr — Holz wurde nicht nachgelegt.', 'hint');
+        return;
+      }
       removeItem('holz', 1);
       buildings.refuel(fire, CAMPFIRE_WOOD_FUEL);
       ui.toast('Holz nachgelegt.');
@@ -540,13 +658,22 @@ function interact() {
   }
   const catcher = aimedBuildingOfType('raincatcher', 3.5, aimedBuilding);
   if (catcher) {
-    const water = buildings.drinkFrom(catcher, 30);
+    // Mitgeführte Feldflasche hat Vorrang: E füllt sie zuverlässig auf.
+    if ((game.inv.feldflasche || 0) > 0 && game.bottleWater < 40 && catcher.water > 0) {
+      const filled = buildings.drinkFrom(catcher, 40 - game.bottleWater);
+      game.bottleWater += filled;
+      ui.toast(`Feldflasche gefüllt · ${Math.round(game.bottleWater)}/40`);
+      sfx.pickup();
+      saveGame();
+      return;
+    }
+    const water = buildings.drinkFrom(catcher, Math.min(30, Math.max(0, (100 - player.thirst) / 1.5)));
     if (water > 0) {
       player.thirst = Math.min(100, player.thirst + water * 1.5);
       ui.toast('Frisches Regenwasser getrunken.');
       sfx.eat();
       saveGame();
-    } else ui.toast('Der Regenfänger ist noch leer.', 'hint');
+    } else ui.toast(catcher.water > 0 ? 'Du hast keinen Durst.' : 'Der Regenfänger ist noch leer.', 'hint');
     return;
   }
   const tent = aimedBuildingOfType('tent', 3.2, aimedBuilding);
@@ -566,6 +693,51 @@ function interact() {
     });
   }
 }
+
+function openStorage(container, title) {
+  stopDesktopAction(); game.storage = container; game.state = 'storage';
+  ui.renderStorage(title, game.inv, container.storage || (container.storage = {}), capacityInfo()); ui.showStorage(true);
+  exitPointerLock(); touch?.show(false);
+}
+function closeStorage() { game.storage = null; ui.showStorage(false); resumePlaying(); if (!touch?.enabled) lockPointer(); }
+function toggleMap(show = game.state !== 'map') {
+  if (show) { stopDesktopAction(); game.state = 'map'; ui.showMap(true, player.pos, landmarks.list, game.discoveries, WORLD_RADIUS, player.yaw, game.expeditionEvent, game.level); exitPointerLock(); touch?.show(false); }
+  else { ui.showMap(false); resumePlaying(); if (!touch?.enabled) lockPointer(); }
+}
+let radialX = 0, radialY = 0, radialChoice = 'hand';
+function openRadial() {
+  if (game.state !== 'playing') return;
+  stopDesktopAction(); game.state = 'radial'; radialX = 0; radialY = 0; radialChoice = selected();
+  const ids = game.hotbar.filter((id) => slotUsable(id, game.inv));
+  ui.showRadial(true, ids, radialChoice);
+}
+function closeRadial() {
+  if (game.state !== 'radial') return;
+  ui.showRadial(false);
+  const idx = game.hotbar.indexOf(radialChoice);
+  if (idx >= 0) selectSlot(idx);
+  game.state = 'playing';
+}
+addEventListener('mousemove', (e) => {
+  if (game.state !== 'radial') return;
+  if (document.pointerLockElement) { radialX += e.movementX; radialY += e.movementY; }
+  else { radialX = e.clientX - innerWidth / 2; radialY = e.clientY - innerHeight / 2; }
+  const max = 180, len = Math.hypot(radialX, radialY);
+  if (len > max) { radialX *= max / len; radialY *= max / len; }
+  radialChoice = ui.selectRadialByVector(radialX, radialY) || radialChoice;
+});
+ui.onStorageMove = (from, id, amount) => {
+  const box = game.storage; if (!box) return;
+  if (from === 'player') {
+    const n = Math.min(amount || 0, game.inv[id] || 0); if (!n) return;
+    if (['gear','armor'].includes(ITEMS[id]?.type)) { ui.toast('Ausgerüstete Gegenstände bleiben im Rucksack.', 'hint'); return; }
+    box.storage[id] = (box.storage[id] || 0) + n; game.inv[id] -= n;
+  } else {
+    const n = Math.min(amount || 0, box.storage[id] || 0); const moved = addItem(id, n, true); box.storage[id] -= moved;
+    if (moved < n) ui.toast('Rucksack voll!', 'hint');
+  }
+  refreshInv(); ui.renderStorage(box.type === 'raft' ? 'Floß-Laderaum' : 'Holztruhe', game.inv, box.storage, capacityInfo()); saveGame();
+};
 
 function enterRaft(raft) {
   game.boat = raft;
@@ -615,24 +787,43 @@ function updateRaft(dt) {
 
 // ---------- Crafting ----------
 ui.onCraft = (recipe) => {
+  if (game.level < (recipe.level || 1)) return ui.toast(`Dafür brauchst du Level ${recipe.level}.`, 'hint');
+  if (recipe.station && ui.craftStation !== recipe.station) return ui.toast('Dieses Rezept benötigt eine Werkbank.', 'hint');
   for (const [id, n] of Object.entries(recipe.cost)) {
     if ((game.inv[id] || 0) < n) return;
   }
   const def = ITEMS[recipe.out];
   if (def.once && (game.inv[recipe.out] || 0) > 0) return;
-  for (const [id, n] of Object.entries(recipe.cost)) removeItem(id, n);
   const amount = recipe.yield || 1;
-  addItem(recipe.out, amount, true);
+
+  // Crafting ist atomar: erst den Zustand nach Verbrauch und Ausgabe prüfen.
+  // Ist dafür kein Platz, bleiben sämtliche Zutaten unangetastet.
+  const projected = { ...game.inv };
+  for (const [id, n] of Object.entries(recipe.cost)) projected[id] = Math.max(0, (projected[id] || 0) - n);
+  projected[recipe.out] = (projected[recipe.out] || 0) + amount;
+  if (inventoryUsed(projected) > inventoryCapacity(projected)) {
+    ui.toast(`Kein Platz für ${amount > 1 ? `${amount}× ` : ''}${def.name} — räume zuerst den Rucksack auf.`, 'hint');
+    return;
+  }
+
+  for (const [id, n] of Object.entries(recipe.cost)) game.inv[id] = Math.max(0, (game.inv[id] || 0) - n);
+  game.inv[recipe.out] = (game.inv[recipe.out] || 0) + amount;
   if (def.dura) game.dura[recipe.out] = def.dura; // neues Werkzeug: volle Haltbarkeit
   ui.toast(amount > 1 ? `${amount}× ${def.name} hergestellt!` : `${def.name} hergestellt!`);
+  if (!game.craftedOnce.includes(recipe.out)) {
+    game.craftedOnce.push(recipe.out);
+    addXP(20, 'neue Herstellung');
+  }
   sfx.craft();
   refreshInv();
+  updateTutorial();
   ui.renderCraft(game.inv);
 };
 
-function openCraft() {
+function openCraft(station = 'hand') {
   stopDesktopAction();
   game.state = 'craft';
+  ui.craftStation = station;
   ui.renderCraft(game.inv);
   ui.showCraft(true);
   exitPointerLock();
@@ -650,14 +841,22 @@ function closeCraft() {
 // Pointer-Lock ist optional: wenn der Browser ihn verweigert,
 // läuft das Spiel trotzdem (Maus-Look über movementX/Y ohne Lock).
 function lockPointer() {
-  if (touch?.enabled || typeof renderer.domElement.requestPointerLock !== 'function') return;
+  if (touch?.enabled) return;
+  // Den Cursor sofort ausblenden. requestPointerLock() wird vom Browser
+  // asynchron bestaetigt und kann deshalb nach einem Menue-Klick fuer einen
+  // kurzen Moment noch den normalen Mauszeiger zeigen.
+  renderer.domElement.classList.add('cursor-captured');
+  // Re-Lock kann ein künstlich großes movementX/Y liefern; kurz ausblenden.
+  player.ignoreLookUntil = performance.now() + 220;
+  if (typeof renderer.domElement.requestPointerLock !== 'function') { player.allowUnlockedLook = true; return; }
   try {
     const p = renderer.domElement.requestPointerLock();
-    if (p && p.catch) p.catch(() => {});
-  } catch { /* Lock nicht verfügbar */ }
+    if (p && p.catch) p.catch(() => { player.allowUnlockedLook = true; });
+  } catch { player.allowUnlockedLook = true; }
 }
 
 function exitPointerLock() {
+  renderer.domElement.classList.remove('cursor-captured');
   if (typeof document.exitPointerLock !== 'function') return;
   try {
     document.exitPointerLock();
@@ -675,9 +874,12 @@ function resumePlaying() {
 let hadLock = false;
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement) {
+    renderer.domElement.classList.add('cursor-captured');
+    player.allowUnlockedLook = false;
     hadLock = true;
     resumePlaying();
   } else {
+    renderer.domElement.classList.remove('cursor-captured');
     if (game.state === 'playing' && hadLock) {
       game.state = 'paused';
       ui.showOverlay('pause');
@@ -704,7 +906,16 @@ function die(cause) {
   ui.setRespawnCountdown(RESPAWN_WAIT);
 }
 
-function respawn() {
+function respawn(withPenalty = false) {
+  if (withPenalty) {
+    let lost = 0;
+    for (const id of ['holz', 'stein', 'fell', 'beeren', 'fleisch_roh', 'fleisch', 'eisenerz', 'eisen']) {
+      const amount = game.inv[id] || 0;
+      const drop = Math.floor(amount * 0.25);
+      if (drop > 0) { game.inv[id] -= drop; lost += drop; }
+    }
+    if (lost) setTimeout(() => ui.toast(`Bergung geglückt — ${lost} Vorräte gingen verloren.`, 'hint'), 500);
+  }
   game.boat = null;
   player.hp = 100;
   player.hunger = 60;
@@ -717,6 +928,7 @@ function respawn() {
   player.vel.set(0, 0, 0);
   game.fireDamageTimer = 0;
   game.fireWarningShown = false;
+  refreshInv();
 }
 
 function updateFireDamage(dt) {
@@ -739,14 +951,16 @@ function updateFireDamage(dt) {
 
 function updateSurvival(dt) {
   const movingDrain = player.sprinting ? 0.13 : 0;
-  player.thirst = Math.max(0, player.thirst - (0.42 + movingDrain) * dt);
+  const bottleFactor = (game.inv.feldflasche || 0) > 0 ? 0.65 : 1;
+  player.thirst = Math.max(0, player.thirst - (0.42 + movingDrain) * bottleFactor * dt);
 
   const altitude = terrainHeight(player.pos.x, player.pos.z);
   const nearWarmFire = !!buildings.nearest('campfire', player.pos, 6)?.lit;
   const hasCoat = (game.inv.pelzmantel || 0) > 0;
   let cold = Math.max(0, (altitude - 6) / 8);
   if (world.night) cold += 0.28;
-  if (world.rainIntensity > 0.2) cold += world.rainIntensity * 0.45;
+  const sheltered = buildings.isSheltered(player.pos);
+  if (world.rainIntensity > 0.2 && !sheltered) cold += world.rainIntensity * 0.45;
   if (player.swimming) cold += 0.75;
   if (hasCoat) cold *= 0.35;
   if (nearWarmFire) cold = -1.2;
@@ -762,6 +976,10 @@ function updateSurvival(dt) {
     game.coldWarning = true;
     ui.toast(hasCoat ? 'Dir wird kalt — suche ein Feuer.' : 'Dir wird kalt — Feuer oder Pelzmantel helfen.', 'hint');
   } else if (player.warmth > 55) game.coldWarning = false;
+  if (player.hunger < 20 && !game.hungerWarning) {
+    game.hungerWarning = true;
+    ui.toast('Du hast großen Hunger — Beeren, Fisch oder gebratenes Fleisch helfen.', 'hint');
+  } else if (player.hunger > 45) game.hungerWarning = false;
 
   if (player.thirst <= 0) {
     player.hp = Math.max(0, player.hp - 4 * dt);
@@ -774,9 +992,129 @@ function updateSurvival(dt) {
   return null;
 }
 
+function updateWorldEvents(dt) {
+  game.eventTimer -= dt;
+  updateExpeditionEvent(dt);
+  if (game.eventTimer > 0 || game.expeditionEvent) return;
+  game.eventTimer = 130 + Math.random() * 150;
+  const roll = Math.random();
+  if (roll < 0.62) {
+    spawnExpeditionEvent(world.night ? 'flare' : 'smoke');
+  } else if (roll < 0.82) {
+    for(let i=0;i<4;i++) animals.spawnNear('hirsch',player.pos,28,48);
+    ui.toast('Eine Hirschwanderung zieht durch die Region.', 'hint');
+  } else {
+    world.weather='storm'; world.weatherTimer=35+Math.random()*25;
+    ui.toast('Eine schwere Sturmfront zieht auf!', 'hint');
+  }
+}
+
+function updateProgression() {
+  const biome = biomeAt(player.pos.x, player.pos.z);
+  const required = REGION_LEVELS[biome.id] || 1;
+  if (!game.visitedBiomes.includes(biome.id)) {
+    game.visitedBiomes.push(biome.id);
+    addXP(35 + required * 10, `${biome.name} entdeckt`);
+  }
+  if (game.lastBiome !== biome.id) {
+    game.lastBiome = biome.id;
+    if (required > game.level) ui.toast(`${biome.name}: empfohlenes Level ${required} — erhöhte Gefahr!`, 'hint');
+    else if (required > 1) ui.toast(`${biome.name} · Gefahrenstufe ${required}`, 'hint');
+  }
+  if (world.day > game.lastRewardDay) {
+    game.lastRewardDay = world.day;
+    addXP(60, 'Nacht überlebt');
+  }
+}
+
+function compassDirection(x, z) {
+  const a = Math.atan2(x - player.pos.x, -(z - player.pos.z));
+  return ['N','NO','O','SO','S','SW','W','NW'][(Math.round(a / (Math.PI / 4)) + 8) % 8];
+}
+
+function spawnExpeditionEvent(type) {
+  let spot = null;
+  for (let i = 0; i < 50; i++) {
+    const a = Math.random() * Math.PI * 2, d = 65 + Math.random() * 70;
+    const x = THREE.MathUtils.clamp(player.pos.x + Math.cos(a) * d, -WORLD_RADIUS + 15, WORLD_RADIUS - 15);
+    const z = THREE.MathUtils.clamp(player.pos.z + Math.sin(a) * d, -WORLD_RADIUS + 15, WORLD_RADIUS - 15);
+    const h = terrainHeight(x, z);
+    if (h > 0.65 && h < 8 && terrainSlope(x, z) < 0.48) { spot = { x, z, h }; break; }
+  }
+  if (!spot) return;
+
+  const group = new THREE.Group();
+  group.position.set(spot.x, spot.h, spot.z);
+  const smokeMat = new THREE.MeshStandardMaterial({ color: type === 'flare' ? 0xd94b35 : 0x454b48, transparent:true, opacity:.62, roughness:1 });
+  for (let i = 0; i < 9; i++) {
+    const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(.7 + i * .11, 1), smokeMat.clone());
+    puff.userData.baseY = 2 + i * 2.1; puff.userData.phase = i * .73;
+    puff.position.set(Math.sin(i * 2.3) * .55, puff.userData.baseY, Math.cos(i * 1.7) * .55);
+    group.add(puff);
+  }
+  if (type === 'flare') {
+    const light = new THREE.PointLight(0xff3f28, 5, 38, 1.5); light.position.y = 10; group.add(light); group.userData.signalLight = light;
+  }
+  scene.add(group);
+
+  const chest = buildings.place('chest', spot.x, spot.z, Math.random() * Math.PI * 2).userData.building;
+  chest.storage = type === 'flare'
+    ? { eisenerz: 4 + Math.floor(Math.random()*3), pfeil: 6, fleisch: 3, fell: 2 }
+    : { eisenerz: 2 + Math.floor(Math.random()*3), holz: 6, fleisch: 2, beeren: 4 };
+  chest.expeditionEvent = true;
+  chest.eventTitle = type === 'flare' ? 'Notfall-Vorratskiste' : 'Verlassene Expeditionskiste';
+  const guard = Math.random() < .45 ? 'baer' : Math.random() < .65 ? 'wildschwein' : 'wolf';
+  const guardCount = guard === 'wolf' ? 3 : guard === 'wildschwein' ? 2 : 1;
+  for (let i = 0; i < guardCount; i++) animals.spawnNear(guard, spot, 5, 10);
+
+  game.expeditionEvent = { type, x:spot.x, z:spot.z, group, chest, remaining:180 };
+  const dir = compassDirection(spot.x, spot.z);
+  ui.toast(type === 'flare' ? `Ein rotes Notsignal leuchtet im ${dir}! Es wird nicht lange bleiben.` : `Eine Rauchsäule steigt im ${dir} auf. Dort stimmt etwas nicht.`, 'hint');
+}
+
+function updateExpeditionEvent(dt) {
+  const e = game.expeditionEvent; if (!e) return;
+  if (!buildings.placed.includes(e.chest)) {
+    scene.remove(e.group);
+    game.expeditionEvent = null;
+    game.eventTimer = 100 + Math.random() * 80;
+    ui.toast('Das Expeditionssignal ist erloschen.', 'hint');
+    return;
+  }
+  e.remaining -= dt;
+  const t = performance.now() * .001;
+  e.group.children.forEach((p, i) => {
+    if (p.userData.baseY == null) return;
+    p.position.y = p.userData.baseY + Math.sin(t * .7 + p.userData.phase) * .45;
+    p.position.x += Math.sin(t * .5 + i) * dt * .05;
+    p.rotation.y += dt * .18;
+  });
+  if (e.group.userData.signalLight) e.group.userData.signalLight.intensity = 4 + Math.sin(t * 8) * 1.5;
+  if (e.remaining <= 0) {
+    scene.remove(e.group);
+    if (buildings.placed.includes(e.chest) && Object.values(e.chest.storage || {}).some((n) => n > 0)) buildings.removeBuilding(e.chest);
+    game.expeditionEvent = null;
+    game.eventTimer = 100 + Math.random() * 80;
+    ui.toast('Das Expeditionssignal ist verschwunden.', 'hint');
+  }
+}
+
+function completeExpeditionEvent(chest) {
+  const e = game.expeditionEvent;
+  if (!e || e.chest !== chest) return;
+  scene.remove(e.group);
+  game.expeditionEvent = null;
+  game.eventTimer = 110 + Math.random() * 90;
+  chest.expeditionEvent = false;
+  ui.toast('Expeditionssignal erreicht — sichere die Vorräte!');
+}
+
 // ---------- Speichern / Laden ----------
-function saveGame() {
-  if (game.state === 'menu') return;
+function saveGame(showFeedback = false) {
+  // Im Menü gibt es nichts zu sichern. Im Tod-Zustand NICHT speichern: sonst
+  // persistiert der Autosave hp=0, und beim nächsten Laden würde der Spieler mit
+  // 0 Leben ins Spiel starten und sofort wieder sterben (Endlos-Todesschleife).
+  if (game.state === 'menu' || game.state === 'dead') return;
   const data = {
     inv: game.inv,
     dura: game.dura,
@@ -793,8 +1131,19 @@ function saveGame() {
     buildings: buildings.serialize(),
     tutorialStage: game.tutorialStage,
     discoveries: game.discoveries,
+    bottleWater: game.bottleWater,
+    hintsShown: game.hintsShown,
+    xp: game.xp,
+    craftedOnce: game.craftedOnce,
+    visitedBiomes: game.visitedBiomes,
+    lastRewardDay: game.lastRewardDay,
   };
-  localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    if (showFeedback) ui.saved();
+  } catch {
+    ui.saved(true);
+  }
 }
 
 function loadGame() {
@@ -828,6 +1177,16 @@ function loadGame() {
     buildings.load(data.buildings);
     game.tutorialStage = data.tutorialStage ?? 0;
     game.discoveries = Array.isArray(data.discoveries) ? data.discoveries : [];
+    game.bottleWater = data.bottleWater || 0;
+    game.hintsShown = data.hintsShown || {};
+    // Bestehende Spielstände erhalten rückwirkend XP für bereits erreichten Fortschritt.
+    const migratedXP = (data.tutorialStage || 0) * 25 + (data.discoveries?.length || 0) * 90
+      + Math.min(8, Object.keys(data.inv || {}).length) * 12;
+    game.xp = Math.max(0, data.xp ?? migratedXP);
+    game.level = levelForXP(game.xp);
+    game.craftedOnce = Array.isArray(data.craftedOnce) ? data.craftedOnce : [];
+    game.visitedBiomes = Array.isArray(data.visitedBiomes) ? data.visitedBiomes : ['meadow'];
+    game.lastRewardDay = data.lastRewardDay || world.day;
     refreshInv();
     updateTutorial(true);
     return true;
@@ -838,11 +1197,22 @@ function loadGame() {
 
 function newGame() {
   localStorage.removeItem(SAVE_KEY);
+  if (game.expeditionEvent?.group) scene.remove(game.expeditionEvent.group);
+  buildings.clear();
   game.inv = { beeren: 2 };
   game.dura = {};
   game.spawn = { x: 0, z: 6 };
   game.tutorialStage = 0;
   game.discoveries = [];
+  game.bottleWater = 0;
+  game.hintsShown = {};
+  game.xp = 0;
+  game.level = 1;
+  game.craftedOnce = [];
+  game.visitedBiomes = ['meadow'];
+  game.lastRewardDay = 1;
+  game.expeditionEvent = null;
+  game.eventTimer = 70;
   world.day = 1;
   world.t = 0.3;
   player.hp = 100;
@@ -856,12 +1226,12 @@ function newGame() {
   refreshInv();
   updateTutorial(true);
   setTimeout(() => { if (game.state === 'playing') ui.toast('Schlage Bäume für Holz (Linksklick)'); }, 1500);
-  setTimeout(() => { if (game.state === 'playing') ui.toast('Öffne Crafting mit TAB oder C'); }, 5000);
+  setTimeout(() => { if (game.state === 'playing') ui.toast('Öffne Crafting und Inventar mit C'); }, 5000);
   setTimeout(() => { if (game.state === 'playing') ui.toast('Beerensträucher stillen den Hunger'); }, 9000);
 }
 
-setInterval(saveGame, 10000);
-addEventListener('pagehide', saveGame);
+setInterval(() => saveGame(true), 30000);
+addEventListener('pagehide', () => saveGame(false));
 
 // ---------- Input ----------
 addEventListener('keydown', (e) => {
@@ -873,19 +1243,48 @@ addEventListener('keydown', (e) => {
     ui.toast(m ? 'Ton aus' : 'Ton an');
     return;
   }
+  // Escape verhält sich in allen Spielfenstern gleich: Das oberste Fenster
+  // schließen und zurück ins Spiel. Titel- und Todesbildschirm bleiben davon
+  // ausgenommen, damit sie nicht versehentlich übersprungen werden können.
+  if (e.code === 'Escape' && !e.repeat) {
+    if (game.state === 'craft') { closeCraft(); return; }
+    if (game.state === 'storage') { closeStorage(); return; }
+    if (game.state === 'map') { toggleMap(false); return; }
+    if (game.state === 'radial') {
+      radialChoice = selected(); // Escape verwirft eine noch nicht bestätigte Auswahl.
+      closeRadial();
+      if (!touch?.enabled) lockPointer();
+      return;
+    }
+    if (game.state === 'paused') {
+      resumePlaying();
+      if (!touch?.enabled) lockPointer();
+      return;
+    }
+  }
+  if (e.code === 'KeyK' && !e.repeat && ['playing', 'map'].includes(game.state)) { toggleMap(); return; }
   if (game.state === 'playing') {
-    if (e.code === 'KeyC' || e.code === 'Tab') openCraft();
+    if (e.code === 'Tab' && !e.repeat) { openRadial(); return; }
+    if (e.code === 'KeyX' && game.boat) { openStorage(game.boat, 'Floß-Laderaum'); return; }
+    if (e.code === 'KeyV' && (game.inv.feldflasche || 0) > 0) {
+      if (game.bottleWater <= 0) ui.toast('Die Feldflasche ist leer.', 'hint');
+      else { const sip=Math.min(22,game.bottleWater);game.bottleWater-=sip;player.thirst=Math.min(100,player.thirst+sip*1.7);ui.toast(`Feldflasche getrunken · ${Math.round(game.bottleWater)}/40`);sfx.eat(); }
+      return;
+    }
+    if (e.code === 'KeyC') openCraft('hand');
     else if (e.code === 'KeyE') interact();
     else if (e.code === 'KeyR') buildings.rotateGhost();
-    else if (/^Digit[1-9]$/.test(e.code)) selectSlot(+e.code.slice(5) - 1);
     else if (e.code === 'Escape' && !document.pointerLockElement) {
       game.state = 'paused';
       ui.showOverlay('pause');
     }
-  } else if (game.state === 'craft' && (e.code === 'KeyC' || e.code === 'Tab' || e.code === 'Escape')) {
+  } else if (game.state === 'craft' && (e.code === 'KeyC' || e.code === 'Escape')) {
     closeCraft();
-  }
+  } else if (game.state === 'storage' && (e.code === 'KeyE' || e.code === 'Escape')) {
+    closeStorage();
+  } else if (game.state === 'map' && e.code === 'Escape') toggleMap(false);
 });
+addEventListener('keyup', (e) => { if (e.code === 'Tab') { e.preventDefault(); closeRadial(); } });
 
 let desktopActionTimer = null;
 
@@ -909,17 +1308,6 @@ addEventListener('mouseup', (e) => {
   if (e.button === 0) stopDesktopAction();
 });
 addEventListener('blur', stopDesktopAction);
-
-addEventListener('wheel', (e) => {
-  if (game.state !== 'playing' || game.hotbar.length < 2) return;
-  const d = e.deltaY > 0 ? 1 : -1;
-  // Zum nächsten benutzbaren Slot springen (leere Werkzeug-Slots überspringen)
-  let i = game.hotIdx;
-  for (let step = 0; step < game.hotbar.length; step++) {
-    i = (i + d + game.hotbar.length) % game.hotbar.length;
-    if (slotUsable(game.hotbar[i], game.inv)) { selectSlot(i); break; }
-  }
-});
 
 addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -949,12 +1337,14 @@ function prerenderFirstFrame() {
 
 function startGame() {
   sfx.unlock();
+  // Derselbe Klick entsperrt das Browser-Audio und startet das Spiel. Ein
+  // zusätzlicher Bestätigungsklick im Titelmenü ist nicht erforderlich.
   startAudioForPlay();
   if (game.state === 'menu') {
     if (!loadGame()) newGame();
   } else if (game.state === 'dead') {
     if (Date.now() < game.respawnAt) return;
-    respawn();
+    respawn(true);
   }
   prerenderFirstFrame();
   resumePlaying();
@@ -964,8 +1354,11 @@ function startGame() {
 document.getElementById('btnPlay').addEventListener('click', startGame);
 
 document.getElementById('craftClose').addEventListener('click', closeCraft);
+document.getElementById('storageClose').addEventListener('click', closeStorage);
+document.getElementById('mapClose').addEventListener('click', () => toggleMap(false));
 
 document.getElementById('btnNew').addEventListener('click', () => {
+  if (localStorage.getItem(SAVE_KEY) && !confirm('Neues Spiel starten? Dein bisheriger Spielstand wird unwiderruflich gelöscht.')) return;
   sfx.unlock();
   startAudioForPlay();
   newGame();
@@ -982,6 +1375,15 @@ function updateHUD() {
   const starving = player.hunger <= 0;
   ui.setBars(player.hp, player.hunger, starving, player.oxygen, player.swimming || player.oxygen < 100, player.stamina, player.thirst, player.warmth);
   ui.setClock(world.day, world.elevation);
+  const nextLandmark = landmarks.list.filter((l) => !game.discoveries.includes(l.id)).sort((a,b) => Math.hypot(a.x-player.pos.x,a.z-player.pos.z)-Math.hypot(b.x-player.pos.x,b.z-player.pos.z))[0];
+  let compass = '';
+  const starterKind = game.tutorialStage === 0 ? 'tree' : game.tutorialStage === 1 && (game.inv.stein || 0) < 2 ? 'rock' : null;
+  const starterResource = starterKind && resources.list.filter((r) => r.alive && r.kind === starterKind)
+    .sort((a,b) => Math.hypot(a.x-player.pos.x,a.z-player.pos.z)-Math.hypot(b.x-player.pos.x,b.z-player.pos.z))[0];
+  if (game.expeditionEvent) compass = `Signal ${compassDirection(game.expeditionEvent.x, game.expeditionEvent.z)} · ${Math.ceil(game.expeditionEvent.remaining)}s`;
+  else if (starterResource) compass = `${starterKind === 'tree' ? 'Holz' : 'Stein'} ${compassDirection(starterResource.x, starterResource.z)}`;
+  else if (nextLandmark) { const a = Math.atan2(nextLandmark.x-player.pos.x, -(nextLandmark.z-player.pos.z)); const dirs=['N','NO','O','SO','S','SW','W','NW']; compass = `Kompass ${dirs[(Math.round(a/(Math.PI/4))+8)%8]}`; }
+  ui.setBiome(`${biomeAt(player.pos.x, player.pos.z).name}${buildings.isSheltered(player.pos) ? ' · geschützt' : ''}`, compass);
   ui.setThreat(world.night, Math.min(10, world.day), world.day % 3 === 0);
 
   // Ziel unterm Fadenkreuz
@@ -992,7 +1394,7 @@ function updateHUD() {
       ui.target(names[t.obj.userData.res.kind]);
     } else if (t.obj.userData.animal) {
       const a = t.obj.userData.animal;
-      ui.target(`${a.def.name} · ${a.hp}/${a.def.hp} Gesundheit`);
+      ui.target(`${a.def.name} · Stufe ${a.tier} · ${a.hp}/${a.maxHp} Gesundheit`);
     } else if (t.obj.userData.fish) {
       ui.target('Fisch · mit dem Bogen jagen');
     }
@@ -1007,20 +1409,36 @@ function updateHUD() {
   const tent = aimedBuildingOfType('tent', 3.2, aimedBuilding);
   const catcher = aimedBuildingOfType('raincatcher', 3.5, aimedBuilding);
   const raft = aimedBuildingOfType('raft', 3.8, aimedBuilding);
+  const chest = aimedBuildingOfType('chest', 3.5, aimedBuilding);
+  const bench = aimedBuildingOfType('workbench', 3.8, aimedBuilding);
+  const cave = landmarks.list.find((l) => l.id === 'schattenhoehle');
+  const caveInside = cave && Math.abs(player.pos.x - cave.x) < 2.4 && player.pos.z - cave.z > -29 && player.pos.z - cave.z < 4;
+  document.body.classList.toggle('insideCave', !!caveInside);
+  document.body.classList.toggle('caveLit', !!caveInside && torchHeld());
   const aimedGate = aimedBuilding?.type === 'gate' ? aimedBuilding : null;
   const fireOut = fire && !fire.lit;
   const canRefuel = fire && fire.lit && fire.fuel < fire.maxFuel && (game.inv.holz || 0) > 0;
-  if (game.boat) prompt = 'W/S — fahren · A/D — lenken · E — aussteigen';
+  if (game.boat) prompt = 'W/S — fahren · A/D — lenken · X — Laderaum · E — aussteigen';
   else if (player.swimming) prompt = player.underwater ? 'Q — tiefer tauchen · Leertaste — auftauchen' : 'Q — abtauchen · Leertaste — auftauchen';
   else if (aimedGate) prompt = `E — Tor ${aimedGate.open ? 'schließen' : 'öffnen'}`;
   else if (selected() === 'hammer' && aimedBuilding) prompt = 'Linksklick — Gebäude abbauen';
   else if (fireOut) prompt = (game.inv.holz || 0) > 0 ? 'E — Feuer mit Holz anfeuern' : 'Feuer erloschen — Holz zum Anfeuern nötig';
-  else if (fire && (game.inv.fleisch_roh || 0) > 0) prompt = 'E — Fleisch braten';
+  else if (fire && (game.inv.fleisch_roh || 0) > 0) prompt = `E — Fleisch braten · ${game.inv.fleisch_roh}× rohes Fleisch`;
   else if (canRefuel) prompt = 'E — Holz nachlegen';
-  else if (catcher) prompt = catcher.water > 1 ? `E — Regenwasser trinken · ${Math.round(catcher.water)}%` : 'Regenfänger leer — warte auf Regen';
+  else if (catcher) prompt = catcher.water > 1
+    ? ((game.inv.feldflasche || 0) > 0 && game.bottleWater < 40
+      ? `E — Feldflasche füllen (${Math.round(game.bottleWater)}/40) · Behälter ${Math.round(catcher.water)}%`
+      : `E — Regenwasser trinken · ${Math.round(catcher.water)}%`)
+    : 'Regenfänger leer — warte auf Regen';
   else if (raft) prompt = 'E — Floß besteigen';
+  else if (chest) prompt = 'E — Holztruhe öffnen';
+  else if (bench) prompt = 'E — Werkbank benutzen';
+  else if (caveInside && !torchHeld()) prompt = 'In der Höhle ist es stockdunkel — wähle eine Fackel oder Laterne';
+  else if (selected() === 'angel') prompt = 'Linksklick — Angel auswerfen';
   else if (tent && world.night) prompt = 'E — Schlafen bis zum Morgen';
   else if (ITEMS[selected()].type === 'placeable') prompt = 'Linksklick — Platzieren · R — Drehen';
+  else if (player.thirst <= 8) prompt = 'KRITISCH: Du verdurstest — finde Wasser!';
+  else if (player.warmth <= 10) prompt = 'KRITISCH: Du erfrierst — suche Schutz oder Feuer!';
   else if (starving) prompt = 'Du verhungerst! Iss etwas!';
   ui.prompt(prompt);
   const interactHint = aimedGate ? 'gate'
@@ -1029,6 +1447,7 @@ function updateHUD() {
     : canRefuel ? 'food'
     : catcher ? 'food'
     : raft ? 'gate'
+    : chest || bench ? 'craft'
     : (tent && world.night) ? 'tent' : null;
   touch?.setInteract(interactHint);
 }
@@ -1070,11 +1489,13 @@ function tick(dt) {
       }
     }
     const movement = game.boat ? updateRaft(dt) : player.update(dt);
+    updateProgression();
     document.body.classList.toggle('underwater', player.underwater);
     touch?.setSwimming(player.swimming);
     updateFireDamage(dt);
     const starve = player.updateStats(dt);
     const survival = updateSurvival(dt);
+    updateWorldEvents(dt);
     if (player.hp <= 0) die(
       survival === 'thirst' ? 'Du bist verdurstet.'
         : survival === 'cold' ? 'Du bist erfroren.'
@@ -1106,8 +1527,10 @@ function tick(dt) {
     }
     animals.update(dt, {
       playerPos: player.pos,
+      playerYaw: player.yaw,
       night: world.night,
       threat,
+      playerLevel: game.level,
       fires,
       animalObstacles: [...buildings.animalObstacles, ...landmarks.obstacles],
       time: now / 1000,
@@ -1178,13 +1601,17 @@ ui.showHud(false);
 refreshInv();
 updateTutorial(true);
 
-// Intro-Musik im Titelmenü starten. Browser blockieren Autoplay ohne Geste –
-// deshalb zusätzlich beim ersten Klick/Tastendruck erneut versuchen.
+// Die Intro-Musik wird unmittelbar mit dem Titelmenü angefordert. Manche Browser
+// erzwingen trotzdem eine erste Nutzerinteraktion; die Listener darunter sind
+// nur der automatische Fallback für diesen nicht vom Spiel umgehbaren Schutz.
 music.play();
 function primeMusicOnGesture() {
-  if (game.state === 'menu' && !sfx.muted) music.play();
-  removeEventListener('pointerdown', primeMusicOnGesture);
-  removeEventListener('keydown', primeMusicOnGesture);
+  // Solange wir im Menü sind, versucht JEDE Geste die Musik anzustoßen. Lehnt der
+  // Autoplay-Schutz den ersten play()-Versuch ab, greift so einfach der nächste
+  // Klick/Tastendruck. (Früher wurden die Listener schon nach dem ersten Versuch
+  // entfernt – schlug der fehl, blieb die Musik dauerhaft stumm.)
+  if (game.state !== 'menu' || sfx.muted) return;
+  music.play();
 }
 addEventListener('pointerdown', primeMusicOnGesture);
 addEventListener('keydown', primeMusicOnGesture);

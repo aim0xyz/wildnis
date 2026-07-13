@@ -15,6 +15,7 @@
     <div id="targetName"></div>
     <div id="prompt" class="hidden"></div>
     <div id="toasts"></div>
+    <div id="saveStatus" class="saveStatus" aria-live="polite"></div>
 
     <div id="statsPanel">
       <div class="bar hp"><span class="bicon" data-icon="heart"></span><div class="track"><div class="fill" id="hpFill"></div></div></div>
@@ -30,6 +31,8 @@
       <span id="dayLabel">Tag 1</span>
     </div>
     <div id="threatPanel" class="hidden"></div>
+    <div id="biomePanel"></div>
+    <div id="levelPanel"><b id="levelLabel">Level 1</b><span><i id="xpFill"></i></span><small id="xpLabel">0 / 100 XP</small></div>
 
     <div id="matPanel"></div>
 
@@ -42,14 +45,30 @@
     <div id="hotbar"></div>
   </div>
 
+  <div id="storage" class="hidden">
+    <div class="storageBox">
+      <h2 id="storageTitle">Lager</h2>
+      <p>Antippen, um einen Stapel zu verschieben.</p>
+      <div class="storageCols"><section><h3 id="storagePlayerTitle">Rucksack</h3><div id="storagePlayer"></div></section><section><h3 id="storageContainerTitle">Lager</h3><div id="storageContainer"></div></section></div>
+      <button id="storageClose" class="bigBtn">Schließen (E)</button>
+    </div>
+  </div>
+  <div id="mapOverlay" class="hidden"><div class="mapBox">
+    <div class="mapHeader"><div><small>CHRONIK DER WILDNIS</small><h2>Erkundungskarte</h2></div><div id="mapCoords"></div></div>
+    <div id="worldMap"><canvas id="mapTerrain" width="180" height="180"></canvas><div id="mapGrid"></div><div id="mapMarkers"></div><span class="compass north">N</span><span class="compass east">O</span><span class="compass south">S</span><span class="compass west">W</span></div>
+    <div id="mapLegend"></div><button id="mapClose" class="bigBtn">Karte schließen (K)</button>
+  </div></div>
+  <div id="radialMenu" class="hidden"><div id="radialCenter"><span>ITEM WÄHLEN</span><b id="radialName">Hand</b></div><div id="radialItems"></div></div>
+
   <!-- Crafting -->
   <div id="craft" class="hidden">
     <div class="craftBox">
       <h2><span data-icon="craft"></span> Crafting</h2>
+      <div id="craftTabs" class="craftTabs" aria-label="Crafting-Kategorien"></div>
       <div id="recipeList"></div>
-      <h2><span data-icon="backpack"></span> Inventar</h2>
+      <h2 id="invTitle"><span data-icon="backpack"></span> Inventar</h2>
       <div id="invGrid"></div>
-      <button id="craftClose" class="bigBtn">Zurück ins Spiel (Tab)</button>
+      <button id="craftClose" class="bigBtn">Zurück ins Spiel (C / Escape)</button>
     </div>
   </div>
 
@@ -66,15 +85,12 @@
         <tr><td>W A S D</td><td>Laufen</td></tr>
         <tr><td>Shift</td><td>Sprinten</td></tr>
         <tr><td>Leertaste</td><td>Springen</td></tr>
-        <tr><td>Q / Leertaste</td><td>Abtauchen / Auftauchen</td></tr>
         <tr><td>Maus</td><td>Umsehen</td></tr>
         <tr><td>Linksklick</td><td>Sammeln · Kämpfen · Essen · Bauen</td></tr>
-        <tr><td>E</td><td>Interagieren (Braten / Anfeuern / Schlafen)</td></tr>
-        <tr><td>W/S · A/D · E</td><td>Floß fahren · lenken · aussteigen</td></tr>
-        <tr><td>Tab / C</td><td>Crafting &amp; Inventar</td></tr>
-        <tr><td>1–9 / Mausrad</td><td>Hotbar</td></tr>
-        <tr><td>R</td><td>Bauteil drehen</td></tr>
-        <tr><td>M</td><td>Ton an / aus</td></tr>
+        <tr><td>E</td><td>Interagieren</td></tr>
+        <tr><td>Tab halten</td><td>Item-Auswahlrad</td></tr>
+        <tr><td>C</td><td>Crafting &amp; Inventar</td></tr>
+        <tr><td>Escape</td><td>Pause</td></tr>
       </table>
     </div>
   </div>
@@ -82,6 +98,7 @@
   <div id="vignette"></div>
   <div id="sleepFade" aria-hidden="true"></div>
   <div id="underwaterOverlay"></div>
+  <div id="caveDarkness" aria-hidden="true"></div>
 
   <div id="touchUI" class="hidden" aria-label="Touch-Steuerung">
     <button id="btnPauseM" class="touchTop" aria-label="Pause" data-icon="pause"></button>

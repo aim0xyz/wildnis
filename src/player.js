@@ -39,9 +39,15 @@ export class Player {
     addEventListener('keydown', (e) => { this.keys[e.code] = true; });
     addEventListener('keyup', (e) => { this.keys[e.code] = false; });
     addEventListener('blur', () => { this.keys = {}; });
-    this.canLook = null; // Fallback ohne Pointer-Lock
+    this.canLook = null;
+    this.allowUnlockedLook = false; // nur aktiv, wenn Pointer-Lock wirklich nicht verfügbar ist
+    this.ignoreLookUntil = 0;
     addEventListener('mousemove', (e) => {
-      if (!document.pointerLockElement && !(this.canLook && this.canLook())) return;
+      // UI-Zustände (Auswahlrad, Karte, Crafting) sperren den Kamerablick auch
+      // dann, wenn der Browser den Mauszeiger noch eingefangen hat.
+      if (this.canLook && !this.canLook()) return;
+      if (performance.now() < this.ignoreLookUntil) return;
+      if (!document.pointerLockElement && !this.allowUnlockedLook) return;
       this.yaw -= e.movementX * 0.0022;
       this.pitch -= e.movementY * 0.0022;
       this.pitch = THREE.MathUtils.clamp(this.pitch, -1.5, 1.5);
@@ -217,8 +223,12 @@ export class Player {
 
   setHeld(itemId) {
     this.heldId = itemId;
+    const visibleId = itemId === 'laterne' ? 'fackel'
+      : itemId === 'metallaxt' ? 'axt'
+        : itemId === 'metallhacke' ? 'spitzhacke'
+          : itemId === 'angel' ? 'bogen' : itemId;
     for (const [k, m] of Object.entries(this.heldModels)) {
-      m.visible = k === itemId;
+      m.visible = k === visibleId;
     }
     if (!this.heldModels[itemId]) this.heldModels.hand.visible = false;
   }

@@ -1,12 +1,13 @@
-// Intro-Musik: loopt mit leichtem Fade an den Nahtstellen und beim Start/Stopp.
-import introUrl from '../assets/music/Intro.mp3';
+// Intro-Musik: bewusst als separate Datei laden. Dadurch kann der Browser die
+// große MP3 cachen und die eigentliche Spiel-HTML bleibt klein.
+const introUrl = './music/Intro.mp3';
 
 export class Music {
   constructor(maxVol = 0.18) {
     this.audio = null;
     this.maxVol = maxVol;
     this.target = 0;       // Zielpegel (0 = aus)
-    this.raf = null;
+    this.timer = null;
     this.lastT = 0;
     this.fadeSeam = 1.4;   // Sekunden Ein-/Ausblendung an Loop-Naht
     this.rate = 0.7;       // Fade-Geschwindigkeit (Pegel pro Sekunde)
@@ -49,7 +50,10 @@ export class Music {
 
   _startFade() {
     if (!this.audio) return;
-    cancelAnimationFrame(this.raf);
+    // Timer statt requestAnimationFrame: Browser pausieren RAF, sobald der Tab
+    // nicht sichtbar/fokussiert ist – dann bliebe die Lautstärke bei 0 stehen
+    // und die Musik wäre stumm, obwohl der Track läuft. setInterval läuft weiter.
+    clearInterval(this.timer);
     this.lastT = performance.now();
     const step = () => {
       if (!this.audio) return;
@@ -57,14 +61,14 @@ export class Music {
       const dt = Math.min((now - this.lastT) / 1000, 0.1);
       this.lastT = now;
 
-      // Leichter Fade an der Loop-Naht (Anfang & Ende des Tracks)
+      // Nur am Loop-Ende ausblenden. Der Track startet direkt; ein zusätzlicher
+      // Anfangs-Fade ließ die Intro-Musik unnötig verspätet einsetzen.
       let seam = 1;
       const d = this.audio.duration;
       if (d && isFinite(d)) {
         const ct = this.audio.currentTime;
         const rem = d - ct;
         if (rem < this.fadeSeam) seam = Math.max(0, rem / this.fadeSeam);
-        else if (ct < this.fadeSeam) seam = Math.min(1, ct / this.fadeSeam);
       }
       const goal = this.target * seam;
       const diff = goal - this.audio.volume;
@@ -73,11 +77,11 @@ export class Music {
 
       if (this.target === 0 && this.audio.volume <= 0.002) {
         this.audio.pause();
-        this.raf = null;
-        return;
+        clearInterval(this.timer);
+        this.timer = null;
       }
-      this.raf = requestAnimationFrame(step);
     };
-    this.raf = requestAnimationFrame(step);
+    this.timer = setInterval(step, 40);
+    step();
   }
 }
