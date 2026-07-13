@@ -36,6 +36,8 @@ renderer.setPixelRatio(basePixelRatio);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = lowPowerDevice ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();

@@ -177,11 +177,31 @@ export class World {
     );
     this.scene.add(this.sunMesh);
 
+    // Weicher Lichtkranz: nur eine transparente Low-Poly-Kugel, also auch auf
+    // Mobilgeraeten deutlich billiger als ein Post-Processing-Bloom-Pass.
+    this.sunGlow = new THREE.Mesh(
+      new THREE.SphereGeometry(18, 12, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xffc85c, transparent: true, opacity: 0.18,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+      })
+    );
+    this.scene.add(this.sunGlow);
+
     this.moonMesh = new THREE.Mesh(
       new THREE.SphereGeometry(7, 10, 10),
       new THREE.MeshBasicMaterial({ color: 0xdfe6ff, fog: false })
     );
     this.scene.add(this.moonMesh);
+
+    this.moonGlow = new THREE.Mesh(
+      new THREE.SphereGeometry(12, 10, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0x9fb8ff, transparent: true, opacity: 0.11,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+      })
+    );
+    this.scene.add(this.moonGlow);
 
     // Sterne
     const rand = mulberry32(99);
@@ -579,6 +599,8 @@ export class World {
     this.sun.intensity = THREE.MathUtils.clamp(elev * 3.2, 0, 2.6) * (1 - rain * 0.7);
     this.sun.color.lerpColors(SUN_DUSK, SUN_DAY, THREE.MathUtils.clamp(elev * 3, 0, 1));
     this.sunMesh.position.copy(playerPos).addScaledVector(sunDir, 380);
+    this.sunGlow.position.copy(this.sunMesh.position);
+    this.sunGlow.material.opacity = 0.08 + THREE.MathUtils.clamp(elev, 0, 1) * 0.14;
 
     const moonDir = sunDir.clone().negate();
     moonDir.y = Math.abs(moonDir.y);
@@ -587,6 +609,8 @@ export class World {
     this.moon.intensity = THREE.MathUtils.clamp(-elev, 0, 1) * 0.4;
     this.moonMesh.position.copy(playerPos).addScaledVector(moonDir, 380);
     this.moonMesh.visible = elev < 0.1;
+    this.moonGlow.position.copy(this.moonMesh.position);
+    this.moonGlow.visible = this.moonMesh.visible;
 
     this.hemi.intensity = (0.22 + THREE.MathUtils.clamp(elev, 0, 1) * 0.85) * (1 - rain * 0.35) + this.flash * 1.4;
 

@@ -445,9 +445,10 @@ body.underwater #underwaterOverlay { opacity: 1; }
   border: 2px solid rgba(255,255,255,.38); color: #fff;
   background: rgba(18,22,16,.58); backdrop-filter: blur(4px);
   font-family: inherit; font-weight: 800; line-height: 1; -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 5px 18px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.12);
 }
-.touchBtn { width: 58px; height: 58px; border-radius: 50%; font-size: 24px; }
-.touchBtn.action { width: 72px; height: 72px; right: 22px; bottom: 26px; font-size: 29px; }
+.touchBtn { width: 64px; height: 64px; border-radius: 50%; font-size: 25px; }
+.touchBtn.action { width: 76px; height: 76px; right: 18px; bottom: max(22px, env(safe-area-inset-bottom)); font-size: 30px; }
 #btnJump { right: 105px; bottom: 91px; }
 #btnDive { right: 176px; bottom: 91px; }
 #btnInteract { right: 112px; bottom: 20px; }
@@ -467,14 +468,38 @@ body.insideCave.caveLit #caveDarkness { opacity:.42; background:radial-gradient(
 body.touch #prompt { bottom: 88px; font-size: 13px; }
 
 @media (max-width: 700px) {
-  #statsPanel { top: max(10px, env(safe-area-inset-top)); left: 10px; padding: 9px 10px; }
-  .track { width: 108px; }
+  #statsPanel { top: max(10px, env(safe-area-inset-top)); left: 10px; gap: 5px; padding: 8px 9px; border-radius: 12px; }
+  .track { width: 86px; height: 11px; }
+  .bar { gap: 6px; }
+  .bicon { width: 16px; height: 16px; }
   #clockPanel { top: max(10px, env(safe-area-inset-top)); }
   #matPanel { top: 58px; right: 10px; padding: 8px 10px; }
-  #levelPanel { top:128px; right:10px; width:112px; }
+  #levelPanel { top: 164px; right: 10px; width: 112px; }
+  #biomePanel { top: 58px; right: 102px; max-width: 142px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #objectivePanel { top: auto; bottom: 178px; left: 10px; max-width: 245px; padding: 8px 10px; }
   #objectivePanel b { font-size: 11px; }
   .panel { padding: 28px 22px; }
   .panel h1 { font-size: 34px; }
   .craftBox { width: 96vw; max-height: 92vh; padding: 16px; }
+  .recipe { flex-wrap: wrap; gap: 9px; }
+  .recipe .rmid { min-width: calc(100% - 58px); }
+  .recipe button { width: 100%; min-height: 46px; }
+  .storageCols { grid-template-columns: 1fr; }
+  .storageBox { width: 96vw; max-height: 94vh; padding: 15px; }
+}
+
+/* Im Handy-Querformat zaehlt freie Sicht mehr als selten benoetigte Werte. */
+@media (max-height: 500px) {
+  body.touch #matPanel,
+  body.touch #levelPanel,
+  body.touch #biomePanel { display: none; }
+  body.touch #statsPanel { top: 10px; left: 10px; gap: 3px; padding: 7px 8px; }
+  body.touch .track { width: 86px; height: 10px; }
+  body.touch .bar { gap: 6px; }
+  body.touch .bicon { width: 16px; height: 16px; }
+  body.touch #objectivePanel { left: 158px; bottom: 82px; max-width: 250px; }
+  body.touch #joystick { left: 78px; top: calc(100% - 78px); width: 104px; height: 104px; }
+  body.touch #btnJump { right: 102px; bottom: 84px; }
+  body.touch #btnRotate { right: 24px; bottom: 104px; }
+  body.touch #prompt { bottom: 76px; }
 }
