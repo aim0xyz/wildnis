@@ -32,9 +32,22 @@ export class Music {
     this._startFade();
   }
 
-  stop() {
+  stop(immediate = false) {
     this.active = false;
     this.target = 0;
+    // Beim Wechsel vom Titelmenü ins Spiel darf ein noch ausstehender
+    // Autoplay-/play()-Versuch nicht in die laufende Expedition hineinreichen.
+    // Der normale Fade bleibt für andere Übergänge verfügbar; der Spielstart
+    // verwendet bewusst den sofortigen Stopp.
+    if (immediate) {
+      clearInterval(this.timer);
+      this.timer = null;
+      if (this.audio) {
+        this.audio.volume = 0;
+        this.audio.pause();
+      }
+      return;
+    }
     this._startFade();
   }
 

@@ -4,8 +4,26 @@
     {
       "name": "dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--port", "5173", "--strictPort"],
-      "port": 5173
+      "runtimeArgs": ["run", "dev", "--", "--port", "5199", "--strictPort"],
+      "port": 5199
+    },
+    {
+      "name": "dev-crazygames",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:crazygames", "--", "--port", "5200", "--strictPort"],
+      "port": 5200
+    },
+    {
+      "name": "landing",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "serve", "landing", "-l", "5210"],
+      "port": 5210
+    },
+    {
+      "name": "dev-verify",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "5211", "--strictPort"],
+      "port": 5211
     }
   ]
 }

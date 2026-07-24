@@ -6,9 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:crazygames": "vite --mode crazygames",
+    "build:crazygames": "vite build --mode crazygames --outDir dist-crazygames",
+    "preview:crazygames": "vite preview --outDir dist-crazygames"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.5",
     "three": "^0.180.0"
   },
   "devDependencies": {

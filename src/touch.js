@@ -109,12 +109,13 @@ export class TouchControls {
       this.actionPid = e.pointerId;
       this.actionLast.x = e.clientX;
       this.actionLast.y = e.clientY;
-      this.actions.primary();
+      const repeat = this.actions.primaryDown ? this.actions.primaryDown() : (this.actions.primary(), true);
       clearInterval(this.repeatTimer);
-      this.repeatTimer = setInterval(() => this.actions.primary(), 480);
+      if (repeat !== false) this.repeatTimer = setInterval(() => this.actions.primary(), 480);
     }, () => {
       this.actionPid = null;
       clearInterval(this.repeatTimer);
+      this.actions.primaryUp?.();
     });
 
     this.btnAction.addEventListener('pointermove', (e) => {
@@ -169,6 +170,7 @@ export class TouchControls {
       this.lookPid = null;
       clearInterval(this.repeatTimer);
       this.actionPid = null;
+      this.actions.primaryCancel?.();
       this.player.keys.Space = false;
       this.player.keys.KeyQ = false;
     }

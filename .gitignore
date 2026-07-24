@@ -1,2 +1,9 @@
 node_modules/
 .DS_Store
+.env.local
+.env.*.local
+supabase/.temp/
+.vercel
+
+# Nicht ausgelieferte Quell-Assets (Lizenz-Backups, Roh-FBX, Original-Audio)
+_source-assets/

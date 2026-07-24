@@ -2,18 +2,24 @@ import * as THREE from 'three';
 import { terrainHeight, WATER_Y, WORLD_RADIUS } from './world.js';
 
 function mat(color) {
-  return new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.8 });
+  return new THREE.MeshStandardMaterial({ color, flatShading: false, roughness: 0.68, metalness: .04 });
 }
 
 function buildFish(color) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.34, 7, 5), mat(color));
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.34, 16, 10), mat(color));
   body.scale.set(1, 0.65, 1.8);
   g.add(body);
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.42, 3), mat(color));
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.42, 5), mat(color));
   tail.position.z = -0.68;
   tail.rotation.x = -Math.PI / 2;
   g.add(tail);
+  g.userData.tail = tail;
+  for (const s of [-1, 1]) {
+    const fin = new THREE.Mesh(new THREE.ConeGeometry(.11,.3,5),mat(color));
+    fin.position.set(s*.25,-.03,.04);fin.rotation.set(Math.PI/2,0,s*.75);g.add(fin);
+  }
+  const dorsal = new THREE.Mesh(new THREE.ConeGeometry(.12,.32,5),mat(color));dorsal.position.set(0,.26,-.08);dorsal.rotation.z=Math.PI;g.add(dorsal);
   for (const x of [-0.13, 0.13]) {
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.035, 5, 4), new THREE.MeshBasicMaterial({ color: 0x101820 }));
     eye.position.set(x, 0.08, 0.52);
@@ -82,6 +88,7 @@ export class Aquatics {
       }
       fish.group.rotation.y = fish.dir;
       fish.group.rotation.z = Math.sin(now * 5 + fish.dir) * 0.05;
+      fish.group.userData.tail.rotation.y = Math.sin(now * 8 + fish.dir) * .45;
     }
     for (let i = this.respawns.length - 1; i >= 0; i--) {
       if (now >= this.respawns[i]) { this.spawn(); this.respawns.splice(i, 1); }

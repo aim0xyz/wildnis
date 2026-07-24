@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>WILDNIS — Low-Poly Survival</title>
+  <title>Untamed: Open World Survival</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
@@ -11,10 +11,19 @@
 
   <!-- HUD -->
   <div id="hud" class="hidden">
-    <div id="crosshair">+</div>
+    <div id="crosshair">+<span id="hitMarker" aria-hidden="true"></span></div>
+    <div id="waypointMarker" class="hidden"><i>◈</i><b></b><small></small></div>
     <div id="targetName"></div>
+    <div id="fishingHud" class="hidden" aria-live="polite">
+      <small id="fishingPhase" data-i18n="fishing.phase">FISHING</small>
+      <b id="fishingStatus" data-i18n="fishing.wait">Waiting for a bite …</b>
+      <div class="fishingMeters">
+        <label><span data-i18n="fishing.fish">Fish</span> <span><i id="fishingProgress"></i></span></label>
+        <label><span data-i18n="fishing.tension">Tension</span> <span><i id="fishingTension"></i></span></label>
+      </div>
+      <em id="fishingHint" data-i18n="fishing.hint">Don't reel in until the float goes under.</em>
+    </div>
     <div id="prompt" class="hidden"></div>
-    <div id="toasts"></div>
     <div id="saveStatus" class="saveStatus" aria-live="polite"></div>
 
     <div id="statsPanel">
@@ -28,9 +37,10 @@
 
     <div id="clockPanel">
       <span id="timeIcon" data-icon="sun"></span>
-      <span id="dayLabel">Tag 1</span>
+      <span id="dayLabel">Day 1</span>
     </div>
     <div id="threatPanel" class="hidden"></div>
+    <div id="multiplayerHud" class="hidden"><i></i><span><b id="multiplayerHudName">Co-op · 1/4</b><small id="multiplayerHudStatus">Searching for teammates …</small></span><code id="multiplayerHudCode"></code></div>
     <div id="biomePanel"></div>
     <div id="levelPanel"><b id="levelLabel">Level 1</b><span><i id="xpFill"></i></span><small id="xpLabel">0 / 100 XP</small></div>
 
@@ -38,77 +48,186 @@
 
     <div id="objectivePanel">
       <span id="objectiveIcon" data-icon="sprout"></span>
-      <div><small>AKTUELLE AUFGABE</small><b id="objectiveText"></b></div>
+      <div><small data-i18n="hud.currentTask">CURRENT TASK</small><b id="objectiveText"></b></div>
     </div>
 
     <div id="selName"></div>
     <div id="hotbar"></div>
   </div>
 
+  <!-- Globale Hinweise: über Spielmenüs, aber unter Pause/Tod. -->
+  <div id="toasts" aria-live="polite" aria-atomic="true"></div>
+
   <div id="storage" class="hidden">
     <div class="storageBox">
-      <h2 id="storageTitle">Lager</h2>
-      <p>Antippen, um einen Stapel zu verschieben.</p>
-      <div class="storageCols"><section><h3 id="storagePlayerTitle">Rucksack</h3><div id="storagePlayer"></div></section><section><h3 id="storageContainerTitle">Lager</h3><div id="storageContainer"></div></section></div>
-      <button id="storageClose" class="bigBtn">Schließen (E)</button>
+      <h2 id="storageTitle" data-i18n="storage.title">Storage</h2>
+      <p data-i18n="storage.hint">Tap to move a stack.</p>
+      <div class="storageCols"><section><h3 id="storagePlayerTitle" data-i18n="storage.backpack">Backpack</h3><div id="storageLoadout"></div><div id="storagePlayer"></div></section><section><h3 id="storageContainerTitle" data-i18n="storage.title">Storage</h3><div id="storageContainer"></div></section></div>
+      <button id="storageClose" class="bigBtn" data-i18n="storage.close">Close (E)</button>
     </div>
   </div>
   <div id="mapOverlay" class="hidden"><div class="mapBox">
-    <div class="mapHeader"><div><small>CHRONIK DER WILDNIS</small><h2>Erkundungskarte</h2></div><div id="mapCoords"></div></div>
-    <div id="worldMap"><canvas id="mapTerrain" width="180" height="180"></canvas><div id="mapGrid"></div><div id="mapMarkers"></div><span class="compass north">N</span><span class="compass east">O</span><span class="compass south">S</span><span class="compass west">W</span></div>
-    <div id="mapLegend"></div><button id="mapClose" class="bigBtn">Karte schließen (K)</button>
+    <div class="mapHeader"><div><small data-i18n="map.kicker">WILDERNESS LOG</small><h2 data-i18n="map.title">Exploration Map</h2></div><div id="mapCoords"></div></div>
+    <div id="worldMap"><canvas id="mapTerrain" width="640" height="640"></canvas><div id="mapGrid"></div><div id="mapMarkers"></div><span class="compass north" data-i18n="compass.n">N</span><span class="compass east" data-i18n="compass.e">E</span><span class="compass south" data-i18n="compass.s">S</span><span class="compass west" data-i18n="compass.w">W</span></div>
+    <div id="mapLegend"></div><button id="mapClose" class="bigBtn" data-i18n="map.close">Close Map (K)</button>
   </div></div>
-  <div id="radialMenu" class="hidden"><div id="radialCenter"><span>ITEM WÄHLEN</span><b id="radialName">Hand</b></div><div id="radialItems"></div></div>
+  <div id="radialMenu" class="hidden">
+    <div class="radialReticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div id="radialCenter"><span data-i18n="radial.equip">EQUIPMENT</span><b id="radialName">Hand</b><small data-i18n="radial.release">RELEASE TO SELECT</small></div>
+    <div id="radialItems"></div>
+    <div id="radialHint"><kbd>TAB</kbd><span data-i18n="radial.hold">hold</span><b>·</b><span data-i18n="radial.move">move mouse</span></div>
+  </div>
 
   <!-- Crafting -->
   <div id="craft" class="hidden">
     <div class="craftBox">
-      <h2><span data-icon="craft"></span> Crafting</h2>
-      <div id="craftTabs" class="craftTabs" aria-label="Crafting-Kategorien"></div>
-      <div id="recipeList"></div>
-      <h2 id="invTitle"><span data-icon="backpack"></span> Inventar</h2>
-      <div id="invGrid"></div>
-      <button id="craftClose" class="bigBtn">Zurück ins Spiel (C / Escape)</button>
+      <header class="craftHeader">
+        <div><small data-i18n="craft.kicker">FIELD WORKBENCH · CRAFTING</small><h2><span data-icon="craft"></span> <span data-i18n="craft.title">Crafting</span></h2></div>
+        <div class="craftHeaderActions">
+          <div id="craftStationLabel" class="stationBadge" data-i18n="craft.onTheMove">On the move</div>
+          <button id="craftClose" class="craftExit" data-i18n-aria="craft.closeAria" aria-label="Close crafting"><span data-i18n="craft.back">Back to game</span> <kbd>E</kbd></button>
+        </div>
+      </header>
+      <div id="craftTabs" class="craftTabs" data-i18n-aria="craft.categoriesAria" aria-label="Crafting categories"></div>
+      <div class="craftWorkspace">
+        <section class="recipePane">
+          <div class="sectionLabel"><span data-i18n="craft.blueprints">BLUEPRINTS</span><i data-i18n="craft.available">Available crafting</i></div>
+          <div id="recipeList"></div>
+        </section>
+        <aside class="inventoryPane">
+          <h2 id="invTitle"><span data-icon="backpack"></span> <span data-i18n="craft.inventory">Inventory</span></h2>
+          <div class="loadoutLabel"><span data-i18n="craft.onBody">ON BODY</span><i data-i18n="craft.noSlot">takes no backpack slot</i></div>
+          <div id="loadoutGrid"></div>
+          <p data-i18n="craft.invHint">Resources, supplies and stored items.</p>
+          <div id="invGrid"></div>
+        </aside>
+      </div>
     </div>
   </div>
 
   <!-- Overlay: Menü / Pause / Tod -->
   <div id="overlay">
     <div class="panel">
-      <h1 id="ovTitle"><span data-icon="tent"></span> WILDNIS</h1>
-      <p id="ovSub" class="sub">Low-Poly Survival</p>
-      <div class="btnrow">
-        <button id="btnPlay" class="bigBtn primary"><span data-icon="play"></span> Spiel starten</button>
-        <button id="btnNew" class="bigBtn hidden"><span data-icon="sprout"></span> Neues Spiel</button>
-      </div>
-      <table id="ovControls" class="controls">
-        <tr><td>W A S D</td><td>Laufen</td></tr>
-        <tr><td>Shift</td><td>Sprinten</td></tr>
-        <tr><td>Leertaste</td><td>Springen</td></tr>
-        <tr><td>Maus</td><td>Umsehen</td></tr>
-        <tr><td>Linksklick</td><td>Sammeln · Kämpfen · Essen · Bauen</td></tr>
-        <tr><td>E</td><td>Interagieren</td></tr>
-        <tr><td>Tab halten</td><td>Item-Auswahlrad</td></tr>
-        <tr><td>C</td><td>Crafting &amp; Inventar</td></tr>
-        <tr><td>Escape</td><td>Pause</td></tr>
-      </table>
+      <div class="panelSignal"><i></i><span id="ovKicker" data-i18n="menu.kicker">EXPEDITION 01 · FIELD LOG</span></div>
+      <header class="panelHeader">
+        <h1 id="ovTitle"><span data-icon="tent"></span> <span data-i18n="menu.title">UNTAMED</span></h1>
+        <p id="ovSub" class="sub">OPEN WORLD · SURVIVAL · DISCOVERY</p>
+      </header>
+      <div class="menuRule"><span></span><b>W</b><span></span></div>
+      <!-- Nur CrazyGames: schlanke Konto-Statuszeile (Speicher-Transparenz).
+           Im Web-Build via CSS ausgeblendet; dort übernimmt #cloudAccount. -->
+      <section id="crazyAccount" class="cloudAccount" aria-labelledby="crazyAccountTitle">
+        <div class="cloudSummary">
+          <i aria-hidden="true"></i>
+          <div><small id="crazyAccountTitle" data-i18n="menu.cloudSave">CLOUD SAVE</small><b id="crazyAccountStatus" data-i18n="menu.guestSave">Guest · sign in to save across devices</b></div>
+          <button id="crazyAccountBtn" type="button" data-i18n="menu.signInCg">Sign in</button>
+        </div>
+      </section>
+      <!-- Schritt 1: Account/Login -->
+      <section id="menuStepLogin" class="menuStep">
+        <section id="cloudAccount" class="cloudAccount" aria-labelledby="cloudTitle">
+          <div class="cloudSummary">
+            <i aria-hidden="true"></i>
+            <div><small id="cloudTitle" data-i18n="menu.cloudSave">CLOUD SAVE</small><b id="cloudStatus" data-i18n="menu.localOnly">Saved on this device only</b></div>
+            <button id="cloudAccountBtn" type="button" data-i18n="menu.connectAccount">Connect account</button>
+          </div>
+          <form id="cloudAuthForm" class="cloudAuthForm hidden">
+            <label><span data-i18n="menu.email">Email</span><input id="cloudEmail" type="email" autocomplete="email" required placeholder="name@example.com"></label>
+            <label><span data-i18n="menu.password">Password</span><input id="cloudPassword" type="password" autocomplete="current-password" minlength="6" required data-i18n-ph="menu.passwordPh" placeholder="At least 6 characters"></label>
+            <div class="cloudActions">
+              <button class="bigBtn primary" type="submit" data-i18n="menu.login">Log in</button>
+              <button id="cloudSignUp" class="bigBtn" type="button" data-i18n="menu.createAccount">Create account</button>
+              <button id="cloudCancel" type="button" data-i18n="menu.cancel">Cancel</button>
+            </div>
+            <p id="cloudMessage" role="status"></p>
+          </form>
+        </section>
+        <div class="btnrow">
+          <button id="menuLoginContinue" class="bigBtn primary" type="button"><span data-i18n="menu.continue">Continue without account</span> <span aria-hidden="true">›</span></button>
+        </div>
+      </section>
+
+      <!-- Schritt 2: Spielmodus -->
+      <section id="menuStepMode" class="menuStep">
+        <div class="modeGrid">
+          <button id="menuModeSolo" class="modeCard" type="button"><b data-i18n="menu.solo">Singleplayer</b><small data-i18n="menu.soloSub">Your own wilderness — saved on this device</small></button>
+          <button id="menuModeKoop" class="modeCard" type="button"><b data-i18n="menu.koop">Multiplayer · Co-op</b><small data-i18n="menu.koopSub">Shared world for up to four players</small></button>
+        </div>
+        <button id="menuModeBack" class="menuBack" type="button" data-i18n="menu.backAccount">‹ Back to account</button>
+      </section>
+
+      <!-- Schritt 3a: Einzelspieler (auch Pause/Tod) -->
+      <section id="menuStepSolo" class="menuStep">
+        <div class="btnrow">
+          <button id="btnPlay" class="bigBtn primary"><span data-icon="play"></span> <span data-i18n="menu.play">Start game</span></button>
+          <button id="btnRespawnPartner" class="bigBtn hidden"><span data-icon="tent"></span> <span data-i18n="menu.atTeammate">At teammate</span></button>
+          <button id="btnNew" class="bigBtn hidden"><span data-icon="sprout"></span> <span data-i18n="menu.newGame">New game</span></button>
+          <button id="btnMainMenu" class="bigBtn hidden"><span data-icon="tent"></span> <span data-i18n="menu.mainMenu">Main menu</span></button>
+        </div>
+        <button id="menuSoloBack" class="menuBack" type="button" data-i18n="menu.changeMode">‹ Change mode</button>
+      </section>
+
+      <!-- Schritt 3b: Koop -->
+      <section id="menuStepKoop" class="menuStep">
+      <section id="multiplayerLobby" class="multiplayerLobby">
+        <div class="multiplayerSummary">
+          <div><small data-i18n="menu.koopExpedition">CO-OP EXPEDITION</small><b id="multiplayerSummaryText" data-i18n="menu.koopSub">Shared world for up to four players</b></div>
+          <button id="multiplayerToggle" type="button" data-i18n="menu.koopMode">Co-op mode</button>
+        </div>
+        <div id="multiplayerForm" class="multiplayerForm hidden">
+          <label class="playerNameField"><span data-i18n="menu.yourName">Your name</span><input id="multiplayerName" maxlength="24" autocomplete="nickname" placeholder="Survivor"></label>
+          <button id="multiplayerHost" class="bigBtn primary" type="button" data-i18n="menu.startKoop">Start new co-op world</button>
+          <div class="joinField"><label><span data-i18n="menu.roomCode">Room code</span><input id="multiplayerCode" maxlength="6" autocomplete="off" placeholder="A1B2C3"></label><button id="multiplayerJoin" class="bigBtn" type="button" data-i18n="menu.join">Join</button></div>
+          <div class="multiplayerHistoryBlock">
+            <div class="multiplayerHistoryTitle"><span data-i18n="menu.recentKoop">RECENT CO-OP EXPEDITIONS</span><button id="multiplayerHistoryRefresh" type="button" data-i18n="menu.refresh">Refresh</button></div>
+            <div id="multiplayerHistory" class="multiplayerHistory"><p data-i18n="menu.loginToSee">Log in to see shared save games.</p></div>
+          </div>
+          <p id="multiplayerMessage" role="status" data-i18n="menu.koopNote">New co-op worlds always start on Day 1. Singleplayer and co-op progress stay completely separate.</p>
+        </div>
+      </section>
+      <!-- Nur CrazyGames: Broadcast-Koop über Einladungslinks (kein Supabase-Login). -->
+      <section id="crazyCoop" class="multiplayerForm">
+        <label class="playerNameField"><span data-i18n="menu.yourName">Your name</span><input id="crazyCoopName" maxlength="24" autocomplete="nickname" placeholder="Survivor"></label>
+        <button id="crazyCoopHost" class="bigBtn primary" type="button" data-i18n="menu.startKoopInvite">Start co-op &amp; invite friends</button>
+        <button id="crazyCoopInvite" class="bigBtn hidden" type="button" data-i18n="menu.inviteFriends">Invite friends</button>
+        <p id="crazyCoopMessage" role="status" data-i18n="menu.koopNoteCg">Start a shared world, then invite friends with the CrazyGames button. Opening an invite link joins automatically.</p>
+      </section>
+      <button id="menuKoopBack" class="menuBack" type="button" data-i18n="menu.changeMode">‹ Change mode</button>
+      </section>
+
+      <section id="cameraChoice" class="cameraChoice" aria-labelledby="cameraChoiceTitle">
+        <div><small id="cameraChoiceTitle" data-i18n="menu.cameraView">CAMERA VIEW</small><b id="cameraChoiceStatus" data-i18n="menu.firstPerson">First person</b></div>
+        <button id="cameraModeToggle" type="button" data-i18n="menu.toThirdPerson">To third person</button>
+      </section>
+      <section id="ovControls" class="controlSheet">
+        <div class="controlTitle"><span data-i18n="controls.title">FIELD CONTROLS</span><small>Desktop</small></div>
+        <table class="controls">
+          <tr><td><kbd>W A S D</kbd></td><td data-i18n="controls.move">Move</td><td><kbd>Shift</kbd></td><td data-i18n="controls.sprint">Sprint</td></tr>
+          <tr><td><kbd>Space</kbd></td><td data-i18n="controls.jump">Jump</td><td><kbd data-i18n="controls.mouse">Mouse</kbd></td><td data-i18n="controls.look">Look</td></tr>
+          <tr><td><kbd>LMB</kbd></td><td data-i18n="controls.primary">Primary action</td><td><kbd>E</kbd></td><td data-i18n="controls.interact">Interact</td></tr>
+          <tr><td><kbd>Tab</kbd></td><td data-i18n="controls.wheel">Selection wheel</td><td><kbd>C</kbd></td><td data-i18n="controls.crafting">Crafting</td></tr>
+          <tr><td><kbd>P</kbd></td><td data-i18n="controls.view">View</td><td><kbd>K</kbd></td><td data-i18n="controls.map">Map</td></tr>
+        </table>
+      </section>
+      <footer class="panelFooter"><span>AUDIO <b>ON</b></span><span>AUTOSAVE <b data-i18n="menu.autosaveOn">ON</b></span><span>BUILD 0.1</span><a href="https://untamed.aimoxyz.xyz/privacy" target="_blank" rel="noopener noreferrer" data-i18n="menu.privacy">PRIVACY</a><a href="https://untamed.aimoxyz.xyz/terms" target="_blank" rel="noopener noreferrer" data-i18n="menu.terms">TERMS</a><button id="langToggle" type="button" class="langToggle">DE</button></footer>
     </div>
   </div>
 
+  <div id="survivalVignette" aria-hidden="true"></div>
   <div id="vignette"></div>
   <div id="sleepFade" aria-hidden="true"></div>
   <div id="underwaterOverlay"></div>
   <div id="caveDarkness" aria-hidden="true"></div>
 
-  <div id="touchUI" class="hidden" aria-label="Touch-Steuerung">
-    <button id="btnPauseM" class="touchTop" aria-label="Pause" data-icon="pause"></button>
-    <button id="btnCraftM" class="touchTop" aria-label="Crafting öffnen" data-icon="craft"></button>
+  <div id="touchUI" class="hidden" data-i18n-aria="touch.controls" aria-label="Touch controls">
+    <button id="btnPauseM" class="touchTop" data-i18n-aria="touch.pause" aria-label="Pause" data-icon="pause"></button>
+    <button id="btnCraftM" class="touchTop" data-i18n-aria="touch.openCraft" aria-label="Open crafting" data-icon="craft"></button>
     <div id="joystick"><div id="joyKnob"></div></div>
-    <button id="btnRotate" class="touchBtn hidden" aria-label="Bauteil drehen" data-icon="rotate"></button>
-    <button id="btnInteract" class="touchBtn hidden" aria-label="Interagieren">E</button>
-    <button id="btnJump" class="touchBtn" aria-label="Springen" data-icon="jump"></button>
-    <button id="btnDive" class="touchBtn hidden" aria-label="Abtauchen" data-icon="dive"></button>
-    <button id="btnAction" class="touchBtn action" aria-label="Aktion" data-icon="fist"></button>
+    <button id="btnRotate" class="touchBtn hidden" data-i18n-aria="touch.rotate" aria-label="Rotate part" data-icon="rotate"></button>
+    <button id="btnInteract" class="touchBtn hidden" data-i18n-aria="touch.interact" aria-label="Interact">E</button>
+    <button id="btnJump" class="touchBtn" data-i18n-aria="touch.jump" aria-label="Jump" data-icon="jump"></button>
+    <button id="btnDive" class="touchBtn hidden" data-i18n-aria="touch.dive" aria-label="Dive" data-icon="dive"></button>
+    <button id="btnAction" class="touchBtn action" data-i18n-aria="touch.action" aria-label="Action" data-icon="fist"></button>
   </div>
 
   <script type="module" src="/src/main.js"></script>
