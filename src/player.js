@@ -200,8 +200,11 @@ export class Player {
 
     const buildLowPolyHand = () => {
       const g = new THREE.Group();
-      const polySkin = new THREE.MeshStandardMaterial({ color: 0xd49a67, roughness: .9, metalness: 0, flatShading: true });
-      const polySkinShadow = new THREE.MeshStandardMaterial({ color: 0xb97850, roughness: .94, metalness: 0, flatShading: true });
+      // Warme, nicht orangestichige Hauttöne. Der dunklere Ton sitzt an
+      // Unterarm und Handunterseite und gibt der Faust Tiefe, ohne dass dafür
+      // Ambient Occlusion nötig wäre.
+      const polySkin = new THREE.MeshStandardMaterial({ color: 0xc98f63, roughness: .88, metalness: 0, flatShading: true });
+      const polySkinShadow = new THREE.MeshStandardMaterial({ color: 0xa9714b, roughness: .93, metalness: 0, flatShading: true });
       const handGeo = new THREE.DodecahedronGeometry(1, 0);
       const segmentGeo = new THREE.CylinderGeometry(.76, 1, 1, 6, 1);
       const up = new THREE.Vector3(0, 1, 0);
@@ -226,6 +229,19 @@ export class Player {
         g.add(part);
         return part;
       };
+      // Fingerglied als Kapsel. Eine eigene Geometrie pro Glied kostet beim
+      // Aufbau nichts (es sind ein gutes Dutzend) und vermeidet die
+      // verzerrten Kappen, die eine skalierte Einheitskapsel hätte.
+      const bone = (start, end, radius, material = polySkin) => {
+        direction.subVectors(end, start);
+        const length = Math.max(.001, direction.length());
+        const part = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 2, 7), material);
+        part.position.copy(start).add(end).multiplyScalar(.5);
+        part.quaternion.setFromUnitVectors(up, direction.normalize());
+        part.castShadow = true;
+        g.add(part);
+        return part;
+      };
 
       // Der Unterarm beginnt weit außerhalb der rechten unteren Bildecke. So
       // kann sein abgeschnittenes Ende auch bei hohen FOVs nie sichtbar werden.
@@ -233,19 +249,37 @@ export class Player {
       const wrist = new THREE.Vector3(.035, -.075, -.075);
       segment(armStart, wrist, .145, polySkinShadow);
 
-      // Stark vereinfachte rechte Faust: Handfläche und Finger werden als zwei
-      // große Formen gelesen. Nur der Daumen bleibt separat, damit die Handseite
-      // eindeutig ist, ohne einzelne Finger oder Knöchel zu modellieren.
-      const palm = polyPart(new THREE.Vector3(.145, .14, .13), new THREE.Vector3(-.005, .025, -.15));
+      // Rechte Faust. Vorher waren Handfläche und Finger je ein skalierter
+      // Dodekaeder — aus der Nähe las sich das als Kartoffel. Jetzt trägt die
+      // Handfläche eine echte Knöchelreihe mit vier einzeln gekrümmten
+      // Fingern; die Silhouette ist dadurch als Faust lesbar.
+      const palm = polyPart(new THREE.Vector3(.148, .132, .124), new THREE.Vector3(-.005, .022, -.155));
       palm.rotation.set(-.06, .06, -.025);
-      const fingers = polyPart(new THREE.Vector3(.132, .078, .112), new THREE.Vector3(-.002, .12, -.235));
-      fingers.rotation.x = -.15;
 
-      const thumbBase = new THREE.Vector3(-.1, .015, -.145);
-      const thumbTip = new THREE.Vector3(-.14, .09, -.225);
-      segment(thumbBase, thumbTip, .045, polySkin);
-      const thumb = polyPart(new THREE.Vector3(.047, .041, .052), thumbTip, polySkin);
-      thumb.rotation.z = -.25;
+      // Zeigefinger (0) bis kleiner Finger (3). Reichweite und Dicke nehmen
+      // zur Handaußenseite hin ab, sonst wirkt die Faust wie ein Block.
+      const reach = [1.0, 1.06, .99, .88];
+      const thickness = [.027, .028, .025, .021];
+      for (let i = 0; i < 4; i++) {
+        const x = -.072 + i * .048;
+        const r = reach[i];
+        const knuckle = new THREE.Vector3(x, .074, -.216);
+        const mid = new THREE.Vector3(x, .034, -.216 - .058 * r);
+        const tip = new THREE.Vector3(x, -.028, -.204 - .046 * r);
+        bone(knuckle, mid, thickness[i]);
+        bone(mid, tip, thickness[i] * .88, polySkinShadow);
+        // Knöchel als eigener kleiner Körper: fängt das Sonnenlicht und macht
+        // die Faust auch im Gegenlicht lesbar.
+        const knob = polyPart(new THREE.Vector3(.030, .026, .028), knuckle);
+        knob.rotation.set(.3, i * .7, .2);
+      }
+
+      // Daumen liegt quer über den Fingern — das macht die Handseite eindeutig.
+      const thumbBase = new THREE.Vector3(-.098, -.002, -.142);
+      const thumbKnuckle = new THREE.Vector3(-.122, .042, -.202);
+      const thumbTip = new THREE.Vector3(-.07, .062, -.243);
+      bone(thumbBase, thumbKnuckle, .036);
+      bone(thumbKnuckle, thumbTip, .031, polySkinShadow);
 
       g.rotation.set(-.06, -.055, -.035);
       g.position.set(.005, -.005, .025);

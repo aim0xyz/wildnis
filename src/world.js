@@ -254,6 +254,68 @@ export function distanceToTrail(x, z) {
   return best;
 }
 
+// ---------- Schnelle Wege-Vorprüfung ----------
+// distanceToTrail läuft über jedes Segment jedes Pfades. Für die einzelnen
+// Abfragen im Weltaufbau ist das egal, für die tausenden Abfragen pro
+// Neuaufbau des Nahfeld-Grases nicht. Dieses einmal gestempelte Raster
+// beantwortet "könnte hier ein Weg sein?" in O(1) — die teure exakte Abfrage
+// zahlen dann nur noch die wenigen Zellen, die tatsächlich am Weg liegen.
+const TRAIL_GRID_CELL = 1.5;
+const TRAIL_GRID_SIDE = Math.ceil(SIZE / TRAIL_GRID_CELL) + 1;
+let trailGrid = null;
+
+function buildTrailGrid(clearance) {
+  const grid = new Uint8Array(TRAIL_GRID_SIDE * TRAIL_GRID_SIDE);
+  // Reichweite = Freihaltebreite plus die halbe Zelldiagonale: so ist jede
+  // Zelle erfasst, die noch einen Punkt innerhalb der Freihaltebreite
+  // enthalten kann.
+  const reach = clearance + TRAIL_GRID_CELL * Math.SQRT1_2;
+  const span = Math.ceil(reach / TRAIL_GRID_CELL);
+  const reachSq = reach * reach;
+  const stamp = (x, z) => {
+    const gx = Math.round((x + SIZE / 2) / TRAIL_GRID_CELL);
+    const gz = Math.round((z + SIZE / 2) / TRAIL_GRID_CELL);
+    for (let dz = -span; dz <= span; dz++) {
+      const iz = gz + dz;
+      if (iz < 0 || iz >= TRAIL_GRID_SIDE) continue;
+      const cz = iz * TRAIL_GRID_CELL - SIZE / 2;
+      for (let dx = -span; dx <= span; dx++) {
+        const ix = gx + dx;
+        if (ix < 0 || ix >= TRAIL_GRID_SIDE) continue;
+        // Kreisförmig statt quadratisch stempeln. Der quadratische Block
+        // markierte an den Ecken bis zur 1,4-fachen Freihaltebreite und
+        // machte aus jedem Trampelpfad eine kahle Schneise.
+        const cx = ix * TRAIL_GRID_CELL - SIZE / 2;
+        if ((cx - x) ** 2 + (cz - z) ** 2 > reachSq) continue;
+        grid[iz * TRAIL_GRID_SIDE + ix] = 1;
+      }
+    }
+  };
+  for (const path of TRAIL_PATHS) {
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1], b = path[i];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (TRAIL_GRID_CELL * 0.5)));
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        stamp(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
+      }
+    }
+  }
+  return grid;
+}
+
+// Liefert true, wenn (x,z) im freizuhaltenden Streifen um einen Weg liegt.
+// Bewusst leicht konservativ: der Streifen wird dadurch bis zu eine Zelle
+// breiter als die exakte Abfrage, was auf einem Trampelpfad ohnehin besser
+// aussieht — und spart die teure Segmentschleife komplett ein.
+export function maybeNearTrail(x, z) {
+  if (!trailGrid) trailGrid = buildTrailGrid(2.2);
+  const gx = Math.round((x + SIZE / 2) / TRAIL_GRID_CELL);
+  const gz = Math.round((z + SIZE / 2) / TRAIL_GRID_CELL);
+  if (gx < 0 || gz < 0 || gx >= TRAIL_GRID_SIDE || gz >= TRAIL_GRID_SIDE) return false;
+  return trailGrid[gz * TRAIL_GRID_SIDE + gx] === 1;
+}
+
 function massif(x, z, cx, cz, radiusX, radiusZ, height, seed) {
   const nx = (x - cx) / radiusX, nz = (z - cz) / radiusZ;
   const distance = Math.hypot(nx, nz);
@@ -526,6 +588,117 @@ function noiseTexture(size = 128, seed = 71) {
   return texture;
 }
 
+// ---------- Per-Pixel-Bodendetail ----------
+// Die Terrain-Vertices liegen rund 7 m auseinander (SIZE/SEGS). Jede
+// Vertex-Farbe wird also über 7 m linear interpoliert — aus Spielerhöhe
+// betrachtet ist der Boden dadurch eine einzige, völlig flache Farbfläche.
+// Statt die Geometrie zu verdichten (teuer) bringt dieser Shader die
+// Variation genau dort zurück, wo sie zählt: pro Pixel, ohne ein einziges
+// zusätzliches Dreieck.
+const GROUND_NOISE_GLSL = `
+float gdHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+float gdNoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(gdHash(i), gdHash(i + vec2(1.0, 0.0)), u.x),
+             mix(gdHash(i + vec2(0.0, 1.0)), gdHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+// Jede Oktave wird gedreht. Ohne das rasten die Zellen des Value-Noise
+// sichtbar aufs Weltgitter ein und der Boden wirkt wie gepunktet.
+const mat2 GD_ROT = mat2(0.8384, -0.5450, 0.5450, 0.8384);
+float gdFbm(vec2 p){
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { v += a * gdNoise(p); p = GD_ROT * p * 2.03; a *= 0.5; }
+  return v;
+}
+// Feinrelief für die Normalen-Störung: zwei gegeneinander gedrehte Oktaven,
+// der Gradient per Differenz (billiger als eine analytische Ableitung).
+float gdRelief(vec2 p){
+  return gdNoise(GD_ROT * p * 3.4 + 51.0) + gdNoise(GD_ROT * p * 9.0 + 91.0) * 0.5;
+}
+`;
+
+// Hängt das Detail an ein beliebiges MeshStandardMaterial. Die Stärke ist
+// über Uniforms steuerbar, damit die adaptive Qualitätsregelung sie später
+// herunterfahren kann, ohne das Material neu zu kompilieren.
+function applyGroundDetail(material, { lowPower = false, strength = 1 } = {}) {
+  const uniforms = {
+    uDetailStrength: { value: strength },
+    uDetailNear: { value: lowPower ? 14 : 26 },
+    uDetailFar: { value: lowPower ? 45 : 85 },
+    uMidFar: { value: lowPower ? 130 : 240 },
+    uReliefAmount: { value: lowPower ? 0.0 : 1.0 },
+  };
+  material.userData.groundDetail = uniforms;
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGroundWorld;')
+      .replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n  vGroundWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vGroundWorld;
+        uniform float uDetailStrength;
+        uniform float uDetailNear;
+        uniform float uDetailFar;
+        uniform float uMidFar;
+        uniform float uReliefAmount;
+        ${GROUND_NOISE_GLSL}`,
+      )
+      // Nach <color_fragment> steht die Vertex-Farbe bereits in diffuseColor.
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        vec2 gdP = vGroundWorld.xz;
+        float gdDist = length(vGroundWorld - cameraPosition);
+        // Feindetail blendet mit der Entfernung aus, sonst flimmert der Boden.
+        float gdFine = (1.0 - smoothstep(uDetailNear, uDetailFar, gdDist)) * uDetailStrength;
+        float gdMid = (1.0 - smoothstep(uDetailFar, uMidFar, gdDist)) * uDetailStrength;
+        float gdMacro = gdFbm(gdP * 0.035);
+        float gdPatch = gdFbm(gdP * 0.21 + 17.0);
+        float gdGrain = gdNoise(GD_ROT * gdP * 3.2 + 51.0);
+        float gdSpeck = gdNoise(GD_ROT * gdP * 11.0 + 91.0);
+        // Helligkeitsvariation über vier Maßstäbe: große Flecken bleiben auch
+        // in der Ferne, das Korn nur in Spielernähe. Die Amplituden bleiben
+        // bewusst klein — der Boden soll Struktur bekommen, nicht gescheckt
+        // aussehen.
+        float gdTone = (gdMacro - 0.5) * 0.15
+                     + (gdPatch - 0.5) * 0.11 * gdMid
+                     + (gdGrain - 0.5) * 0.06 * gdFine
+                     + (gdSpeck - 0.5) * 0.05 * gdFine;
+        diffuseColor.rgb *= 1.0 + gdTone;
+        // Feuchte Senken werden satter und kühler, trockene Kuppen gelblich.
+        float gdDamp = smoothstep(0.34, 0.76, gdMacro);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.88, 1.05, 0.84), gdDamp * 0.16 * gdMid);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.09, 1.03, 0.80), (1.0 - gdDamp) * 0.12 * gdMid);
+        diffuseColor.rgb = clamp(diffuseColor.rgb, 0.0, 1.0);`,
+      )
+      // Normalen-Störung erzeugt echtes, vom Sonnenstand abhängiges Mikrorelief.
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+        float gdRel = gdFine * uReliefAmount;
+        if (gdRel > 0.004) {
+          float gdE = 0.12;
+          float gdH0 = gdRelief(gdP);
+          float gdHx = gdRelief(gdP + vec2(gdE, 0.0));
+          float gdHz = gdRelief(gdP + vec2(0.0, gdE));
+          normal = normalize(normal + vec3(-(gdHx - gdH0), 0.0, -(gdHz - gdH0)) * gdRel * 0.55);
+        }`,
+      );
+  };
+  // Ohne eigenen Cache-Key teilt sich das Material sonst ein kompiliertes
+  // Programm mit anderen MeshStandardMaterials ohne diese Injektion.
+  material.customProgramCacheKey = () => `groundDetail-${lowPower ? 'low' : 'high'}`;
+  return material;
+}
+
 export class World {
   constructor(scene, { lowPowerDevice = false } = {}) {
     this.scene = scene;
@@ -557,6 +730,7 @@ export class World {
     this.buildLights();
     this.buildSky();
     this.buildGrass();
+    this.buildNearGrass();
     this.buildAssetGroundCover();
     this.buildReeds();
     this.buildGroundDetails();
@@ -614,12 +788,13 @@ export class World {
     }
     g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-    const bump = noiseTexture(128, 701);
-    bump.repeat.set(95, 95);
-    const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true, flatShading: false, roughness: 0.94,
-      bumpMap: bump, bumpScale: 0.18,
-    });
+    // Die frühere Bump-Map kachelte alle ~26 m und war damit zu grob, um als
+    // Bodenstruktur zu lesen. Das prozedurale Detail unten ersetzt sie.
+    const mat = applyGroundDetail(
+      new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: false, roughness: 0.94 }),
+      { lowPower: this.lowPowerDevice },
+    );
+    this.terrainMaterial = mat;
     this.terrain = new THREE.Mesh(g, mat);
     this.terrain.receiveShadow = true;
     this.scene.add(this.terrain);
@@ -1048,6 +1223,205 @@ export class World {
     this.scene.add(mesh);
   }
 
+  // ---------- Dichtes Nahfeld-Gras ----------
+  // buildGrass streut 17 000 Halme über einen Radius von 1230 m — das ist ein
+  // Halm pro rund 280 m² und aus Spielerhöhe schlicht unsichtbar. Statt das
+  // Budget weltweit zu erhöhen (was nichts bringt und alles kostet), hält
+  // dieses Feld eine feste Zahl Büschel dicht um den Spieler und setzt sie
+  // neu, sobald er seinen Anker verlässt. Das Gras steht damit genau dort,
+  // wo die Kamera es sieht.
+  buildNearGrass() {
+    const low = this.lowPowerDevice;
+    this.nearGrassRadius = low ? 15 : 22;
+    this.nearGrassCell = low ? 1.0 : 0.6;
+    // Neu aufbauen erst, wenn der Spieler den Anker deutlich verlassen hat.
+    // Der Anker rastet aufs Zellgitter ein, damit gleich bleibende Zellen
+    // exakt dieselben Büschel behalten und nichts sichtbar umherspringt.
+    this.nearGrassStep = this.nearGrassCell * 4;
+    this._nearGrassAnchor = null;
+
+    const rand = mulberry32(9917);
+    const positions = [], bends = [], normals = [];
+    for (let b = 0; b < 6; b++) {
+      const a = rand() * Math.PI * 2;
+      const r = Math.sqrt(rand()) * 0.24;
+      const ox = Math.cos(a) * r, oz = Math.sin(a) * r;
+      const h = 0.13 + rand() * 0.19;
+      const w = 0.010 + rand() * 0.008;
+      const dir = rand() * Math.PI * 2;
+      const px = Math.cos(dir) * w, pz = Math.sin(dir) * w;
+      const lean = h * (0.14 + rand() * 0.16);
+      const leanX = Math.cos(dir + Math.PI / 2) * lean;
+      const leanZ = Math.sin(dir + Math.PI / 2) * lean;
+      // Sich verjüngendes Blatt statt eines Dreiecks: ein einzelnes Dreieck
+      // läuft spitz zu und liest sich aus der Nähe als Stachel. Ein Halm mit
+      // breiter Basis und schmaler, abgeflachter Spitze wirkt wie Gras.
+      const tip = 0.26; // Spitzenbreite als Anteil der Basisbreite
+      const bx = ox - px, bz = oz - pz;   // Basis links
+      const cx = ox + px, cz = oz + pz;   // Basis rechts
+      const tx = ox + leanX, tz = oz + leanZ; // Spitzenmitte
+      const tlx = tx - px * tip, tlz = tz - pz * tip;
+      const trx = tx + px * tip, trz = tz + pz * tip;
+      positions.push(bx, 0, bz, cx, 0, cz, trx, h, trz);
+      positions.push(bx, 0, bz, trx, h, trz, tlx, h, tlz);
+      // aBend: 0 an der Wurzel, 1 an der Spitze — nur die Spitze schwingt.
+      bends.push(0, 0, 1, 0, 1, 1);
+      // Alle Normalen zeigen nach oben. Echte Halm-Normalen würden die
+      // Rückseiten fast schwarz rendern; so nimmt das Gras dieselbe
+      // Beleuchtung an wie der Boden darunter und liest sich als Teppich
+      // statt als Feld dunkler Splitter.
+      for (let n = 0; n < 6; n++) normals.push(0, 1, 0);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('aBend', new THREE.Float32BufferAttribute(bends, 1));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+
+    const uniforms = {
+      uGrassTime: { value: 0 },
+      uGrassWind: { value: new THREE.Vector2(0.3, 0.1) },
+    };
+    this.nearGrassUniforms = uniforms;
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff, side: THREE.DoubleSide, roughness: 1,
+    });
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, uniforms);
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>
+          attribute float aBend;
+          varying float vBend;
+          uniform float uGrassTime;
+          uniform vec2 uGrassWind;`)
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vBend = aBend;')
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          // Der Ursprung der Instanz liefert eine ortsfeste Phase, damit
+          // benachbarte Büschel als Windwelle über die Wiese laufen statt
+          // im Gleichtakt zu wackeln.
+          vec3 gOrigin = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+          float gPhase = gOrigin.x * 0.34 + gOrigin.z * 0.27;
+          float gSway = sin(uGrassTime * 1.9 + gPhase) * 0.5
+                      + sin(uGrassTime * 3.7 + gPhase * 1.7) * 0.22;
+          float gAmt = aBend * aBend;
+          transformed.xz += uGrassWind * gAmt * (0.10 + gSway * 0.085);`);
+      // Bei DoubleSide dreht three.js die Normale für Rückseiten um — die
+      // nach oben gelegten Halm-Normalen zeigten dadurch auf der Rückseite
+      // nach unten und die Halme wurden schwarz. Hier wird der Flip wieder
+      // aufgehoben, damit jeder Halm von oben beleuchtet bleibt.
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vBend;')
+        .replace('#include <normal_fragment_begin>',
+          '#include <normal_fragment_begin>\n  normal = normalize(vNormal);')
+        // Wurzel im Eigenschatten, Spitze im Licht. Ohne diesen Verlauf wirkt
+        // das Gras wie flacher Flaum auf dem Boden statt wie ein Bestand.
+        .replace('#include <color_fragment>',
+          '#include <color_fragment>\n  diffuseColor.rgb *= 0.66 + 0.52 * vBend;');
+    };
+    mat.customProgramCacheKey = () => 'nearGrass';
+
+    const budget = low ? 1600 : 5600;
+    const mesh = new THREE.InstancedMesh(geo, mat, budget);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.count = 0;
+    mesh.receiveShadow = true;
+    // Das Feld sitzt immer um den Spieler; Frustum-Culling über die (falsche,
+    // weil instanzlose) Geometrie-Bounding-Sphere würde es nur fälschlich
+    // ausblenden.
+    mesh.frustumCulled = false;
+    this.nearGrass = mesh;
+    this.scene.add(mesh);
+  }
+
+  refreshNearGrass(playerPos) {
+    const mesh = this.nearGrass;
+    if (!mesh) return;
+    const cell = this.nearGrassCell;
+    const anchorX = Math.round(playerPos.x / cell) * cell;
+    const anchorZ = Math.round(playerPos.z / cell) * cell;
+    const anchor = this._nearGrassAnchor;
+    if (anchor && Math.abs(anchorX - anchor.x) < this.nearGrassStep
+              && Math.abs(anchorZ - anchor.z) < this.nearGrassStep) return;
+    this._nearGrassAnchor = { x: anchorX, z: anchorZ };
+
+    const radius = this.nearGrassRadius;
+    const span = Math.floor(radius / cell);
+    const budget = mesh.instanceMatrix.count;
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const eul = new THREE.Euler();
+    const s = new THREE.Vector3();
+    const v = new THREE.Vector3();
+    const col = new THREE.Color();
+    const cA = new THREE.Color(0x7cbf4c), cB = new THREE.Color(0x407f33);
+    const forestA = new THREE.Color(0x40763a), forestB = new THREE.Color(0x24512c);
+    const marshA = new THREE.Color(0x6b7c49), marshB = new THREE.Color(0x455a3c);
+    // Biome nur auf einem groben Block-Raster abfragen: biomeAt ist deutlich
+    // teurer als eine Höhenabfrage, und innerhalb von ~3 m wechselt es nicht.
+    // Numerischer Schlüssel — Template-Strings hier hiessen tausende
+    // String-Allokationen pro Neuaufbau.
+    const biomeCache = this._biomeCache || (this._biomeCache = new Map());
+    biomeCache.clear();
+    const biomeOf = (x, z) => {
+      const key = (Math.round(x / 3.4) + 4096) * 8192 + (Math.round(z / 3.4) + 4096);
+      let id = biomeCache.get(key);
+      if (id === undefined) { id = biomeAt(x, z).id; biomeCache.set(key, id); }
+      return id;
+    };
+
+    // Inline-PRNG statt mulberry32 pro Zelle: der Closure-Aufbau für jede der
+    // tausenden Zellen war der grösste Einzelposten im Neuaufbau.
+    let rngState = 0;
+    const seedAt = (a, b) => { rngState = (Math.imul(a, 73856093) ^ Math.imul(b, 19349663)) >>> 0; };
+    const rnd = () => {
+      rngState = (Math.imul(rngState ^ (rngState >>> 15), 2246822507) ^ 0x9e3779b9) >>> 0;
+      return (rngState >>> 8) / 16777216;
+    };
+
+    let placed = 0;
+    for (let iz = -span; iz <= span && placed < budget; iz++) {
+      for (let ix = -span; ix <= span && placed < budget; ix++) {
+        const cx = anchorX + ix * cell;
+        const cz = anchorZ + iz * cell;
+        if ((cx - playerPos.x) ** 2 + (cz - playerPos.z) ** 2 > radius * radius) continue;
+        // Ortsfester Hash: dieselbe Zelle liefert immer dasselbe Büschel,
+        // egal von welchem Anker aus sie erreicht wird.
+        seedAt(Math.round(cx / cell), Math.round(cz / cell));
+        if (rnd() > 0.82) continue; // Lücken lassen die Wiese natürlich wirken
+        const jx = cx + (rnd() - 0.5) * cell * 0.9;
+        const jz = cz + (rnd() - 0.5) * cell * 0.9;
+        const h = terrainHeight(jx, jz, 'visual');
+        if (h < 0.62 || h > 8.2) continue;
+        if (maybeNearTrail(jx, jz)) continue;
+        const biome = biomeOf(jx, jz);
+        if (biome === 'coast' || biome === 'alpine') continue;
+
+        v.set(jx, h + 0.015, jz);
+        eul.set(0.04 + rnd() * 0.1, rnd() * Math.PI * 2, (rnd() - 0.5) * 0.08);
+        q.setFromEuler(eul);
+        const sc = 0.72 + rnd() * 0.85;
+        s.set(sc * (0.85 + rnd() * 0.3), sc, sc * (0.85 + rnd() * 0.3));
+        m.compose(v, q, s);
+        mesh.setMatrixAt(placed, m);
+
+        if (biome === 'forest') col.lerpColors(forestA, forestB, rnd());
+        else if (biome === 'marsh') col.lerpColors(marshA, marshB, rnd());
+        else col.lerpColors(cA, cB, rnd());
+        // Direkte RGB-Streuung statt offsetHSL: der HSL-Umweg war pro Büschel
+        // der teuerste Einzelschritt und ist für dieses bisschen Farbrauschen
+        // nicht nötig.
+        col.r *= 0.9 + rnd() * 0.2;
+        col.g *= 0.92 + rnd() * 0.16;
+        col.b *= 0.88 + rnd() * 0.24;
+        mesh.setColorAt(placed, col);
+        placed++;
+      }
+    }
+    mesh.count = placed;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
   buildAssetGroundCover() {
     this.assetGroundCover = [];
     this.groundCoverReady = Promise.all([
@@ -1376,22 +1750,30 @@ export class World {
   buildClouds() {
     this.clouds = [];
     const rand = mulberry32(777);
-    // Facettierte, strahlend weiße Kumuluswolken statt grauer Blobs. Flat
-    // Shading + Sonnenlicht ergibt helle Kuppen und schattige Unterseiten;
-    // die Farbe wird in update() an Tageszeit und Wetter angepasst.
+    // Kumuluswolken. Ein Ikosaeder mit Detailstufe 0 hat nur 20 Flächen —
+    // zusammen mit Flat Shading und einer dunklen Schattenseite lasen sich
+    // die Wolken vorher als graue Felsbrocken am Himmel. Runde Puffs, weiche
+    // Normalen und ein kräftiges Eigenleuchten halten auch die Unterseite
+    // hell; die Farbe wird in update() an Tageszeit und Wetter angepasst.
     this.cloudMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff, transparent: true, opacity: 0.92,
-      flatShading: true, roughness: 1, metalness: 0,
-      emissive: 0xb8ccdd, emissiveIntensity: 0.42,
+      color: 0xffffff, transparent: true, opacity: 0.94,
+      flatShading: false, roughness: 1, metalness: 0,
+      emissive: 0xcfe0ee, emissiveIntensity: 0.72,
+      // Wolken schweben 60–110 m hoch und bis zu 700 m weit — weit jenseits
+      // von fog.far. Mit Nebel lösten sie sich dadurch komplett in der
+      // Himmelsfarbe auf. Als Himmelselement gehören sie, wie die Kuppel,
+      // nicht in den Bodennebel.
+      fog: false,
     });
-    const count = this.lowPowerDevice ? 9 : 14;
+    const cloudGeo = new THREE.IcosahedronGeometry(1, this.lowPowerDevice ? 1 : 2);
+    const count = this.lowPowerDevice ? 9 : 16;
     for (let i = 0; i < count; i++) {
       const grp = new THREE.Group();
-      const parts = 4 + Math.floor(rand() * 4);
+      const parts = 5 + Math.floor(rand() * 4);
       // Ein großer Kernpuff, um den sich kleinere Puffs mit angehobener
       // Basis gruppieren — die flache Unterkante liest sich als Kumulus.
       for (let k = 0; k < parts; k++) {
-        const b = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 0), this.cloudMat);
+        const b = new THREE.Mesh(cloudGeo, this.cloudMat);
         const core = k === 0;
         const sx = core ? 9 + rand() * 8 : 4 + rand() * 5;
         b.scale.set(sx, sx * (0.42 + rand() * 0.2), sx * (0.6 + rand() * 0.35));
@@ -1404,7 +1786,7 @@ export class World {
         grp.add(b);
       }
       grp.position.set((rand() - 0.5) * 1000, 62 + rand() * 46, (rand() - 0.5) * 1000);
-      grp.scale.setScalar(0.75 + rand() * 0.85);
+      grp.scale.setScalar(1.05 + rand() * 1.05);
       grp.userData.speed = 1 + rand() * 1.5;
       this.scene.add(grp);
       this.clouds.push(grp);
@@ -1578,6 +1960,14 @@ export class World {
     this.updateWind(dt);
     const rain = this.rainIntensity;
 
+    // Nahfeld-Gras: Wind läuft jeden Frame im Shader, neu gesetzt wird nur,
+    // wenn der Spieler sein Ankerfeld verlassen hat.
+    if (this.nearGrassUniforms) {
+      this.nearGrassUniforms.uGrassTime.value += dt;
+      this.nearGrassUniforms.uGrassWind.value.set(this.wind.x, this.wind.z);
+    }
+    this.refreshNearGrass(playerPos);
+
     const sunDir = this._sunDir.set(Math.cos(ang), Math.sin(ang), 0.35).normalize();
 
     // Sonne + Schattenkamera folgt dem Spieler
@@ -1615,6 +2005,11 @@ export class World {
     if (this.flash > 0.01) sky.lerp(this._flashColor, this.flash * 0.55);
     this.scene.fog.color.copy(sky);
     this.scene.fog.far = Math.min(this.fogFarCap, 260 + THREE.MathUtils.clamp(elev, 0, 1) * 70 - rain * 130);
+    // fog.near stand fest auf 60 m, während far bis 330 m wandert: alles ab
+    // dem zweiten Hügel lag damit schon halb im Dunst und die Weitsicht war
+    // flach. Der Dunst setzt jetzt proportional zur Sichtweite ein — bei
+    // Regen früher, bei klarer Sicht deutlich später.
+    this.scene.fog.near = this.scene.fog.far * (0.36 - rain * 0.16);
 
     const top = this.skyDome.material.uniforms.topColor.value;
     const horizon = this.skyDome.material.uniforms.horizonColor.value;
@@ -1657,8 +2052,10 @@ export class World {
         .lerp(CLOUD_DUSK, THREE.MathUtils.smoothstep(elev, -.18, -.05))
         .lerp(CLOUD_DAY, THREE.MathUtils.smoothstep(elev, -.05, .22));
       if (rain > 0) cloudCol.lerp(CLOUD_STORM, rain * 0.75);
-      this.cloudMat.emissive.copy(cloudCol).multiplyScalar(0.5);
-      this.cloudMat.emissiveIntensity = 0.22 + THREE.MathUtils.clamp(elev, 0, 1) * 0.3;
+      // Kräftigeres Eigenleuchten: hält die Unterseiten hell, damit die Puffs
+      // als weiße Kumuluswolken lesen und nicht als graue Klumpen.
+      this.cloudMat.emissive.copy(cloudCol).multiplyScalar(0.62);
+      this.cloudMat.emissiveIntensity = 0.3 + THREE.MathUtils.clamp(elev, 0, 1) * 0.42;
     }
 
     this.water.position.y = WATER_Y;
