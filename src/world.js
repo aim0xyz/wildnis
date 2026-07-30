@@ -29,6 +29,49 @@ const GROUND_COVER_SPECS = [
 const groundCoverLoader = new GLTFLoader();
 const groundCoverTextureLoader = new THREE.TextureLoader();
 
+// Große weltweite InstancedMeshes können von Three.js nur als Ganzes
+// ausgeblendet werden. Liegt ein Teil davon im Sichtfeld, verarbeitet die GPU
+// sonst auch jede Pflanze hinter der Kamera und weit jenseits des Nebels.
+// Räumliche Chunks behalten exakt dieselben Instanzmatrizen und Farben, machen
+// die vorhandene Frustum- und Distanz-Ausblendung aber tatsächlich wirksam.
+function chunkInstancedMesh(source, chunkSize, namePrefix) {
+  const buckets = new Map();
+  const matrix = new THREE.Matrix4();
+  for (let i = 0; i < source.count; i++) {
+    source.getMatrixAt(i, matrix);
+    const x = matrix.elements[12], z = matrix.elements[14];
+    const cx = Math.floor(x / chunkSize), cz = Math.floor(z / chunkSize);
+    const key = `${cx}:${cz}`;
+    let indices = buckets.get(key);
+    if (!indices) { indices = []; buckets.set(key, indices); }
+    indices.push(i);
+  }
+
+  const chunks = [];
+  const color = new THREE.Color();
+  for (const [key, indices] of buckets) {
+    const chunk = new THREE.InstancedMesh(source.geometry, source.material, indices.length);
+    chunk.name = `${namePrefix}-${key}`;
+    chunk.castShadow = source.castShadow;
+    chunk.receiveShadow = source.receiveShadow;
+    chunk.renderOrder = source.renderOrder;
+    for (let i = 0; i < indices.length; i++) {
+      source.getMatrixAt(indices[i], matrix);
+      chunk.setMatrixAt(i, matrix);
+      if (source.instanceColor) {
+        source.getColorAt(indices[i], color);
+        chunk.setColorAt(i, color);
+      }
+    }
+    chunk.instanceMatrix.needsUpdate = true;
+    if (chunk.instanceColor) chunk.instanceColor.needsUpdate = true;
+    chunk.computeBoundingBox();
+    chunk.computeBoundingSphere();
+    chunks.push(chunk);
+  }
+  return chunks;
+}
+
 async function loadGroundCoverGeometry(url) {
   const gltf = await groundCoverLoader.loadAsync(url);
   gltf.scene.updateMatrixWorld(true);
@@ -720,6 +763,11 @@ export class World {
     this._skyTarget = new THREE.Color(SKY_DAY);
     this._skyBase = new THREE.Color(SKY_DAY);
     this._horizonTarget = new THREE.Color(HORIZON_DAY);
+    this.vegetationChunks = [];
+    this._vegetationCullDirty = true;
+    this._vegetationCullX = Infinity;
+    this._vegetationCullZ = Infinity;
+    this._vegetationCullFar = -1;
 
     scene.background = new THREE.Color(SKY_DAY);
     scene.fog = new THREE.Fog(SKY_DAY.clone(), 60, 260);
@@ -1227,7 +1275,12 @@ export class World {
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     mesh.receiveShadow = true;
-    this.scene.add(mesh);
+    // Die Verteilung bleibt unverändert; nur die Render-Batches werden
+    // räumlich getrennt, damit Offscreen-Gras keine Vertexarbeit verursacht.
+    const chunks = chunkInstancedMesh(mesh, 180, 'world-grass');
+    for (const chunk of chunks) this.scene.add(chunk);
+    this.vegetationChunks.push(...chunks);
+    this._vegetationCullDirty = true;
   }
 
   // ---------- Dichtes Nahfeld-Gras ----------
@@ -1535,14 +1588,42 @@ export class World {
 
         mesh.count = placed;
         mesh.instanceMatrix.needsUpdate = true;
-        mesh.computeBoundingBox();
-        mesh.computeBoundingSphere();
-        this.scene.add(mesh);
-        this.assetGroundCover.push(mesh);
+        // Besonders die detaillierten GLB-Pflanzen waren als ein weltweites
+        // Mesh immer vollständig auf der GPU. Chunks rendern nur die räumlich
+        // relevanten Instanzen, ohne Anzahl oder Darstellung zu verändern.
+        const chunks = chunkInstancedMesh(mesh, 180, `ground-cover-${spec.name}`);
+        for (const chunk of chunks) this.scene.add(chunk);
+        this.assetGroundCover.push(...chunks);
+        this.vegetationChunks.push(...chunks);
+        this._vegetationCullDirty = true;
       });
     }).catch((error) => {
       console.warn('Ground-cover assets konnten nicht geladen werden.', error);
     });
+  }
+
+  updateVegetationVisibility(playerPos) {
+    if (!playerPos || !this.vegetationChunks.length) return;
+    const fogFar = Math.min(this.scene.fog?.far ?? 900, this.fogFarCap);
+    const dx = playerPos.x - this._vegetationCullX;
+    const dz = playerPos.z - this._vegetationCullZ;
+    // Sichtbarkeit muss nicht pro Frame neu berechnet werden. Der zusätzliche
+    // Rand der Chunk-Bounding-Sphere verhindert dabei jedes Aufpoppen.
+    if (!this._vegetationCullDirty && dx * dx + dz * dz < 16
+        && Math.abs(fogFar - this._vegetationCullFar) < 0.5) return;
+
+    this._vegetationCullX = playerPos.x;
+    this._vegetationCullZ = playerPos.z;
+    this._vegetationCullFar = fogFar;
+    this._vegetationCullDirty = false;
+    for (const chunk of this.vegetationChunks) {
+      const sphere = chunk.boundingSphere;
+      if (!sphere) { chunk.visible = true; continue; }
+      const cx = sphere.center.x - playerPos.x;
+      const cz = sphere.center.z - playerPos.z;
+      const visibleRadius = fogFar + sphere.radius;
+      chunk.visible = cx * cx + cz * cz <= visibleRadius * visibleRadius;
+    }
   }
 
   buildReeds() {
@@ -2152,6 +2233,7 @@ export class World {
 
     this.updateWeather(dt);
     this.updateWind(dt, playerPos);
+    this.updateVegetationVisibility(playerPos);
     const rain = this.rainIntensity;
 
     // Nahfeld-Gras: Wind läuft jeden Frame im Shader, neu gesetzt wird nur,
