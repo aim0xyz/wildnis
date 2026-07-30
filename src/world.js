@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { fbm, mulberry32 } from './noise.js';
+import { applyWindSway, applyTrample, updateWindUniforms } from './wind.js';
 
 const GROUND_COVER_TEXTURE_URL = new URL(
   '../assets/ground-cover/Ekfs_bush_map.png',
@@ -736,6 +737,7 @@ export class World {
     this.buildGroundDetails();
     this.buildMicroDetails();
     this.buildFireflies();
+    this.buildGustLeaves();
     this.buildAmbientMoments();
     this.buildClouds();
     this.buildBirds();
@@ -1176,6 +1178,11 @@ export class World {
     geo.setAttribute('position',new THREE.Float32BufferAttribute(bladePositions,3));
     geo.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({ color:0xffffff, side:THREE.DoubleSide, roughness:1, flatShading:true });
+    // Die Halme reichen bis y=0.82; ab dem Boden gebogen wandert nur die
+    // Spitze. Ohne das steht das Fernfeld still, während das Nahfeld weht —
+    // die Kante zwischen beiden fällt sofort auf.
+    applyWindSway(mat, { amplitude: .12, pivot: 0, span: .82, speed: 1.7, instanced: true });
+    applyTrample(mat, { instanced: true, reach: .35 });
     // Die detaillierten Pack-Gräser ergänzen diese günstige Fernvegetation.
     // Günstige Instanzen füllen auch die weiten Ebenen zwischen den größeren
     // Asset-Büscheln. Auf schwachen Geräten bleibt das Budget deutlich kleiner.
@@ -1318,6 +1325,9 @@ export class World {
         .replace('#include <color_fragment>',
           '#include <color_fragment>\n  diffuseColor.rgb *= 0.66 + 0.52 * vBend;');
     };
+    // Muss nach der eigenen onBeforeCompile-Zuweisung kommen — applyTrample
+    // hängt sich hinter die bestehende an, statt sie zu ersetzen.
+    applyTrample(mat, { instanced: true, reach: .3 });
     mat.customProgramCacheKey = () => 'nearGrass';
 
     const budget = low ? 1600 : 5600;
@@ -1441,9 +1451,45 @@ export class World {
         side: THREE.DoubleSide,
       });
 
+      // Pilze stehen im Windschatten des Waldbodens und sollen nicht wackeln;
+      // Gras, Blumen und Büsche bekommen je nach Art unterschiedlich viel
+      // Nachgiebigkeit. Die Biegespanne kommt aus der echten Höhe des Assets,
+      // damit der Ansatz am Boden in jedem Fall stehen bleibt.
+      const SWAY_BY_KIND = {
+        grass: { amplitude: .11, speed: 1.75 },
+        flower: { amplitude: .09, speed: 1.5 },
+        bush: { amplitude: .07, speed: 1.1 },
+      };
+      const swayMaterials = new Map();
+      const materialFor = (spec, geometry) => {
+        const preset = SWAY_BY_KIND[spec.kind];
+        if (!preset) return material;
+        if (!swayMaterials.has(spec.name)) {
+          geometry.computeBoundingBox();
+          const box = geometry.boundingBox;
+          const swayMat = material.clone();
+          applyWindSway(swayMat, {
+            amplitude: preset.amplitude,
+            pivot: box.min.y,
+            span: Math.max(.05, box.max.y - box.min.y),
+            speed: preset.speed,
+            instanced: true,
+          });
+          // Büsche sind zu massiv, um beim Durchlaufen wegzuknicken.
+          if (spec.kind !== 'bush') {
+            applyTrample(swayMat, {
+              instanced: true,
+              reach: Math.max(.2, (box.max.y - box.min.y) * .45),
+            });
+          }
+          swayMaterials.set(spec.name, swayMat);
+        }
+        return swayMaterials.get(spec.name);
+      };
+
       GROUND_COVER_SPECS.forEach((spec, index) => {
         const count = this.lowPowerDevice ? spec.lowCount : spec.count;
-        const mesh = new THREE.InstancedMesh(geometries[index], material, count);
+        const mesh = new THREE.InstancedMesh(geometries[index], materialFor(spec, geometries[index]), count);
         mesh.name = `ground-cover-${spec.name}`;
         mesh.castShadow = false;
         mesh.receiveShadow = false;
@@ -1504,7 +1550,13 @@ export class World {
     const geo = new THREE.CylinderGeometry(0.025, 0.035, 0.9, 5);
     geo.translate(0, 0.42, 0);
     const reedCount = this.lowPowerDevice ? 420 : 1150;
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: 0x668f45, flatShading: false, roughness: 0.96 }), reedCount);
+    // Schilf am Ufer ist das dankbarste Wind-Motiv: hoch, dünn, in Gruppen.
+    const reedMat = applyWindSway(
+      new THREE.MeshStandardMaterial({ color: 0x668f45, flatShading: false, roughness: 0.96 }),
+      { amplitude: .17, pivot: -.03, span: .9, speed: 1.35, instanced: true },
+    );
+    applyTrample(reedMat, { instanced: true, reach: .5 });
+    const mesh = new THREE.InstancedMesh(geo, reedMat, reedCount);
     const matrix = new THREE.Matrix4(), pos = new THREE.Vector3(), scale = new THREE.Vector3();
     const quat = new THREE.Quaternion();
     let placed = 0;
@@ -1632,6 +1684,145 @@ export class World {
     leaves.count = leafCount; leaves.instanceMatrix.needsUpdate = true;
     if (leaves.instanceColor) leaves.instanceColor.needsUpdate = true;
     leaves.receiveShadow = true; this.scene.add(leaves);
+  }
+
+  // ---------- Aufgewirbeltes Laub ----------
+  // Die Böen im Windsystem waren bisher nur hörbar (sfx.setWind) und an der
+  // Vegetation ablesbar. Ein paar Blätter, die mit der Bö durchs Bild treiben,
+  // machen den Moment sichtbar. Inaktive Blätter werden auf Skalierung 0
+  // gesetzt statt ausgeblendet — ein geteiltes Material kann keine Deckkraft
+  // pro Instanz, eine Skalierung schon.
+  buildGustLeaves() {
+    const count = this.lowPowerDevice ? 40 : 130;
+    const rand = mulberry32(5150);
+    const geo = new THREE.PlaneGeometry(.17, .12);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff, roughness: 1, side: THREE.DoubleSide, flatShading: true,
+    });
+    const mesh = new THREE.InstancedMesh(geo, mat, count);
+    // Die Instanzen wandern weit vom Ursprung weg; die Bounding-Sphere der
+    // Geometrie würde sie fälschlich wegkullen.
+    mesh.frustumCulled = false;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+
+    const palette = [0x8c6738, 0x9c7b3c, 0x6d4e2e, 0xa8853f, 0x5f6b30];
+    const col = new THREE.Color();
+    this.gustLeafData = [];
+    for (let i = 0; i < count; i++) {
+      col.setHex(palette[Math.floor(rand() * palette.length)]);
+      col.offsetHSL(0, 0, (rand() - .5) * .1);
+      mesh.setColorAt(i, col);
+      this.gustLeafData.push({
+        active: false, x: 0, y: -999, z: 0,
+        vx: 0, vy: 0, vz: 0,
+        spin: 0, spinSpeed: 0, tumble: 0, tumbleSpeed: 0,
+        life: 0, maxLife: 1, size: .7 + rand() * .8,
+      });
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let i = 0; i < count; i++) mesh.setMatrixAt(i, zero);
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+    this.gustLeaves = mesh;
+    this._gustRand = mulberry32(97531);
+    this.scene.add(mesh);
+  }
+
+  updateGustLeaves(dt, playerPos) {
+    const mesh = this.gustLeaves;
+    if (!mesh) return;
+    const data = this.gustLeafData;
+    const rand = this._gustRand;
+
+    // Nur die Bö zählt, nicht der Grundwind: sonst wirbelt permanent Laub.
+    // Normale Böen liegen bei 0.12–0.42, Sturmböen gehen bis 0.67 — der
+    // Faktor ist so gewählt, dass erst der Sturm das volle Budget ausreizt.
+    const gust = THREE.MathUtils.clamp(this.wind.gust * 1.5, 0, 1);
+    const wantActive = Math.floor(data.length * gust);
+    let activeCount = 0;
+    for (const l of data) if (l.active) activeCount++;
+
+    const windX = this.wind.x, windZ = this.wind.z;
+    const windLen = Math.hypot(windX, windZ) || 1;
+    const dirX = windX / windLen, dirZ = windZ / windLen;
+
+    const matrix = new THREE.Matrix4();
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const euler = new THREE.Euler();
+    const scl = new THREE.Vector3();
+    const zeroScale = new THREE.Vector3(0, 0, 0);
+
+    for (let i = 0; i < data.length; i++) {
+      const l = data[i];
+
+      if (!l.active && activeCount < wantActive) {
+        // Luvseitig einsetzen, damit das Blatt am Spieler vorbeizieht statt
+        // vor ihm aus dem Nichts aufzutauchen.
+        const spread = (rand() - .5) * 26;
+        const sx = playerPos.x - dirX * (16 + rand() * 9) - dirZ * spread;
+        const sz = playerPos.z - dirZ * (16 + rand() * 9) + dirX * spread;
+        const ground = terrainHeight(sx, sz);
+        // Über Wasser und über der Baumgrenze wirbelt kein Laub.
+        if (ground > .5 && ground < 9 && ['forest', 'meadow', 'marsh'].includes(biomeAt(sx, sz).id)) {
+          l.active = true;
+          l.x = sx; l.z = sz;
+          l.y = ground + .35 + rand() * 3.4;
+          const speed = 3.4 + rand() * 3.2;
+          l.vx = dirX * speed; l.vz = dirZ * speed;
+          l.vy = .25 + rand() * .8;
+          l.spin = rand() * Math.PI * 2;
+          l.spinSpeed = (rand() - .5) * 7;
+          l.tumble = rand() * Math.PI * 2;
+          l.tumbleSpeed = 2.5 + rand() * 5;
+          l.maxLife = 3.5 + rand() * 4.5;
+          l.life = l.maxLife;
+          activeCount++;
+        }
+      }
+
+      if (!l.active) {
+        matrix.compose(pos.set(0, -999, 0), quat.identity(), zeroScale);
+        mesh.setMatrixAt(i, matrix);
+        continue;
+      }
+
+      l.life -= dt;
+      // Auftrieb lässt nach, das Blatt sinkt zum Ende hin ab.
+      l.vy -= dt * 1.15;
+      l.x += (l.vx + windX * 1.4) * dt;
+      l.z += (l.vz + windZ * 1.4) * dt;
+      l.y += l.vy * dt;
+      l.spin += l.spinSpeed * dt;
+      l.tumble += l.tumbleSpeed * dt;
+      // Taumeln: das Blatt segelt seitlich aus, statt geradeaus zu fliegen.
+      l.x += Math.sin(l.tumble) * dt * 1.1;
+      l.z += Math.cos(l.tumble * .8) * dt * 1.1;
+
+      const ground = terrainHeight(l.x, l.z);
+      const dx = l.x - playerPos.x, dz = l.z - playerPos.z;
+      if (l.life <= 0 || l.y < ground + .05 || dx * dx + dz * dz > 46 * 46) {
+        l.active = false;
+        activeCount--;
+        matrix.compose(pos.set(0, -999, 0), quat.identity(), zeroScale);
+        mesh.setMatrixAt(i, matrix);
+        continue;
+      }
+
+      // Ein- und Ausblenden über die Skalierung, damit nichts hart aufpoppt.
+      const fade = Math.min(1, Math.min(l.life, l.maxLife - l.life) * 2.2);
+      const s = l.size * Math.max(0, fade);
+      euler.set(l.tumble, l.spin, l.tumble * .6);
+      quat.setFromEuler(euler);
+      matrix.compose(pos.set(l.x, l.y, l.z), quat, scl.set(s, s, s));
+      mesh.setMatrixAt(i, matrix);
+    }
+
+    mesh.instanceMatrix.needsUpdate = true;
   }
 
   buildFireflies() {
@@ -1888,7 +2079,7 @@ export class World {
     }
   }
 
-  updateWind(dt) {
+  updateWind(dt, playerPos = null) {
     this.windTimer -= dt;
     if (this.windTimer <= 0) {
       this.windTarget.angle += (Math.random() - 0.5) * 1.35;
@@ -1909,6 +2100,9 @@ export class World {
     const force = THREE.MathUtils.clamp(this.wind.speed + this.wind.gust, 0, 1.25);
     this.wind.x = Math.cos(this.wind.angle) * force;
     this.wind.z = Math.sin(this.wind.angle) * force;
+    // Ein einziger Uniform-Satz versorgt Bäume, Büsche, Gras und Schilf —
+    // inklusive der Spielerposition, vor der Gras zur Seite weicht.
+    updateWindUniforms(dt, this.wind, playerPos);
   }
 
   updateRain(dt, playerPos) {
@@ -1957,7 +2151,7 @@ export class World {
     this.nightfall = !wasNight && this.night;
 
     this.updateWeather(dt);
-    this.updateWind(dt);
+    this.updateWind(dt, playerPos);
     const rain = this.rainIntensity;
 
     // Nahfeld-Gras: Wind läuft jeden Frame im Shader, neu gesetzt wird nur,
@@ -2034,6 +2228,7 @@ export class World {
     const fireflyHabitat=['forest','meadow','marsh'].includes(localBiome)&&terrainHeight(playerPos.x,playerPos.z)>WATER_Y+.15;
     this.fireflies.material.opacity = fireflyHabitat?THREE.MathUtils.clamp((-elev - 0.02) * 5, 0, 0.9)*(1-rain*.8):0;
     if (this.fireflies.material.opacity > 0.01) this.updateFireflies(playerPos);
+    this.updateGustLeaves(dt, playerPos);
     this.updateAmbientMoments(dt,playerPos,elev,rain);
 
     // Wolken driften und nehmen die Lichtstimmung an: weiß am Tag, warm in

@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { terrainHeight, terrainSlope, biomeAt, distanceToTrail, WATER_Y, WORLD_RADIUS } from './world.js';
 import { fbm, mulberry32 } from './noise.js';
 import { toolDamage } from './items.js';
+import { applyWindSway } from './wind.js';
 
 const TRUNK = 0x765039;
 const FOLIAGE = [0x397b43, 0x4b8c49, 0x2f6d3c, 0x5c984d];
@@ -101,13 +102,41 @@ function rockMaterial(color) {
   return MATERIALS.get(key);
 }
 
+// Laubkronen: Kugelblobs sitzen an den Astspitzen, ihr lokales y läuft von
+// -1 bis 1. Die Krone schwingt für sich, zusätzlich zur starren Neigung des
+// ganzen Baums in update() — erst dieses Eigenleben liest sich als Wind.
 function foliage(color) {
   const key = `foliage-${color}`;
   if (!MATERIALS.has(key)) {
-    MATERIALS.set(key, new THREE.MeshStandardMaterial({
+    MATERIALS.set(key, applyWindSway(new THREE.MeshStandardMaterial({
       color, roughness: .9, flatShading: false,
       emissive: color, emissiveIntensity: .045,
-    }));
+    }), { amplitude: .22, pivot: -1, span: 2, speed: .85 }));
+  }
+  return MATERIALS.get(key);
+}
+
+// Nadelkränze nutzen dieselbe Optik, aber eine Kegel-Geometrie mit y von
+// -0.5 bis 0.5: der Kranzansatz am Stamm bleibt sitzen, die Spitze wandert.
+function pineFoliage(color) {
+  const key = `pine-foliage-${color}`;
+  if (!MATERIALS.has(key)) {
+    MATERIALS.set(key, applyWindSway(new THREE.MeshStandardMaterial({
+      color, roughness: .9, flatShading: false,
+      emissive: color, emissiveIntensity: .045,
+    }), { amplitude: .2, pivot: -.5, span: 1, speed: .95 }));
+  }
+  return MATERIALS.get(key);
+}
+
+// Büsche teilen sich sonst std() mit Stämmen und Felsen — die sollen nicht
+// wackeln, also bekommt das Buschlaub ein eigenes Material.
+function bushFoliage(color) {
+  const key = `bush-foliage-${color}`;
+  if (!MATERIALS.has(key)) {
+    MATERIALS.set(key, applyWindSway(new THREE.MeshStandardMaterial({
+      color, roughness: .92, flatShading: false,
+    }), { amplitude: .13, pivot: -.55, span: 1.1, speed: 1.25 }));
   }
   return MATERIALS.get(key);
 }
@@ -517,7 +546,7 @@ export class Resources {
       let rad = 1.05 + rand() * .35;
       for (let i = 0; i < levels; i++) {
         const coneHeight = 1.55 + rand() * .3;
-        const cone = new THREE.Mesh(PINE_GEO, foliage(col));
+        const cone = new THREE.Mesh(PINE_GEO, pineFoliage(col));
         cone.scale.set(rad, coneHeight, rad);
         cone.position.set((rand() - .5) * .06, y + coneHeight * .5, (rand() - .5) * .06);
         cone.rotation.y = rand() * Math.PI;
@@ -526,7 +555,7 @@ export class Resources {
         y += .7;
         rad *= .77;
       }
-      const tip = new THREE.Mesh(PINE_GEO, foliage(col));
+      const tip = new THREE.Mesh(PINE_GEO, pineFoliage(col));
       tip.scale.set(.28, 1.05, .28); tip.position.y = y + .5; tip.castShadow = true; g.add(tip);
     } else {
       // Ein zentraler Leitast und seitliche Äste wachsen tatsächlich vom Stamm
@@ -602,7 +631,7 @@ export class Resources {
   buildBush(rand) {
     const g = new THREE.Group();
     for (let i = 0; i < 3; i++) {
-      const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(.48 + rand() * .22, 1), std(i === 1 ? 0x397c3e : 0x2e6b34, .92));
+      const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(.48 + rand() * .22, 1), bushFoliage(i === 1 ? 0x397c3e : 0x2e6b34));
       bush.position.set((i - 1) * .38, .4 + (i % 2) * .14, (rand() - .5) * .24);
       bush.scale.set(1, .7 + rand() * .25, .9); bush.rotation.y = rand() * Math.PI; bush.castShadow = true; g.add(bush);
     }
